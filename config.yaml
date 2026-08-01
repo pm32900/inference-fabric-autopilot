@@ -1,0 +1,30 @@
+# Inference Fabric Autopilot config file
+# Edit file to match env
+
+server:
+  port: 8080
+
+collector:
+    mode: simulated     # simulated or prometheus
+    interval_seconds: 5 # how often to collect or simulate telemetry
+
+kubernetes:
+  enabled: false        # set to true when running inside a cluster
+  namespace: inference  # namespace to watch for inference workloads
+
+database:
+  enabled: false        # set to true when TimescaleDB is running
+  dsn: "postgres://postgres:autopilot@localhost:5432/autopilot?sslmode=disable"
+
+recommender:
+  thresholds:
+    low_gpu_util_pct:    30.0
+    high_gpu_mem_pct:    85.0
+    high_p95_latency_ms: 500.0
+    high_queue_depth:    10
+    high_error_rate_pct: 2.0
+    min_replicas_for_rps: 10.0    # rps per replica above which we suggest scaling
+
+logging:
+  level: info         # "debug", "info", "warn", "error"
+  format: text        # "text" or "json"

@@ -1,0 +1,61 @@
+controlPlane:
+  image:
+    repository: ifa-control-plane
+    tag: dev
+    pullPolicy: IfNotPresent
+  replicas: 1
+  port: 8080
+  resources:
+    requests:
+      cpu: 100m
+      memory: 128Mi
+    limits:
+      cpu: 500m
+      memory: 256Mi
+
+nodeAgent:
+  image:
+    repository: ifa-node-agent
+    tag: dev
+    pullPolicy: IfNotPresent
+  resources:
+    requests:
+      cpu: 50m
+      memory: 64Mi
+    limits:
+      cpu: 200m
+      memory: 128Mi
+
+config:
+  server:
+    port: 8080
+  collector:
+    mode: simulated
+    interval_seconds: 5
+  kubernetes:
+    enabled: false
+    namespace: inference
+    sync_interval_seconds: 30
+  database:
+    enabled: false
+    dsn: "postgres://postgres:autopilot@localhost:5432/autopilot?sslmode=disable"
+  recommender:
+    thresholds:
+      low_gpu_util_pct: 30.0
+      high_gpu_mem_pct: 85.0
+      high_p95_latency_ms: 500.0
+      high_queue_depth: 10
+      high_error_rate_pct: 2.0
+      min_replicas_for_rps: 10.0
+  logging:
+    level: info
+    format: text
+
+serviceAccount:
+  create: true
+  name: ""
+
+networkPolicy:
+  enabled: false
+  prometheusNamespace: monitoring
+  timescaledbNamespace: timescaledb

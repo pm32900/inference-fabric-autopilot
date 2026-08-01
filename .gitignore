@@ -1,0 +1,20 @@
+# Go binaries
+bin/
+*.exe
+
+# Go test cache
+*.test
+*.out
+
+# Environment files
+.env
+.env.local
+
+# OS noise
+.DS_Store
+Thumbs.db
+
+# Editor
+.idea/
+.vscode/
+*.swp

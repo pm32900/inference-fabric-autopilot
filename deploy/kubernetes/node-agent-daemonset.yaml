@@ -1,0 +1,41 @@
+# DaemonSet ensures one node-agent pod runs on every node in the cluster.
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: node-agent
+  namespace: inference-autopilot
+  labels:
+    app: node-agent
+spec:
+  selector:
+    matchLabels:
+      app: node-agent
+  template:
+    metadata:
+      labels:
+        app: node-agent
+    spec:
+      serviceAccountName: inference-autopilot
+      tolerations:
+        # Allow scheduling on GPU nodes which may have taints
+        - key: nvidia.com/gpu
+          operator: Exists
+          effect: NoSchedule
+      containers:
+        - name: node-agent
+          image: inference-fabric-autopilot/node-agent:latest
+          imagePullPolicy: IfNotPresent
+          env:
+            - name: NODE_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: spec.nodeName
+            - name: CONTROL_PLANE_URL
+              value: "http://control-plane.inference-autopilot.svc.cluster.local"
+          resources:
+            requests:
+              cpu: "50m"
+              memory: "32Mi"
+            limits:
+              cpu: "100m"
+              memory: "64Mi"

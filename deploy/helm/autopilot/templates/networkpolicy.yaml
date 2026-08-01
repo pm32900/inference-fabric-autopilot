@@ -1,0 +1,65 @@
+{{- if .Values.networkPolicy.enabled }}
+# NetworkPolicy — default-deny egress for the inference namespace.
+#
+# Allows only:
+#   - DNS (UDP/TCP 53)       — required for in-cluster service resolution
+#   - Kubernetes API server  — ports 443 and 6443
+#   - Prometheus             — port 9090 in .Values.networkPolicy.prometheusNamespace
+#   - TimescaleDB            — port 5432 in .Values.networkPolicy.timescaledbNamespace
+#                              (only meaningful if database.enabled is true)
+#
+# CNI requirement: NetworkPolicy enforcement requires Calico, Cilium, or Antrea.
+# Flannel does not enforce NetworkPolicy without an additional controller.
+# If your CNI does not support NetworkPolicy, this manifest is accepted by the
+# API server but silently not enforced. Verify with an egress connectivity test.
+#
+# Kubernetes API server note:
+# Ports 443 and 6443 are allowed generically. If your cluster requires a specific
+# IP allowlist for the API server, add an ipBlock rule manually after deployment.
+# Run `kubectl cluster-info` to find the API server address.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "autopilot.fullname" . }}-egress-deny
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "autopilot.labels" . | nindent 4 }}
+spec:
+  # Apply to all pods in this namespace
+  podSelector: {}
+  policyTypes:
+    - Egress
+  egress:
+    # Allow DNS — required for in-cluster service name resolution
+    - ports:
+        - port: 53
+          protocol: UDP
+        - port: 53
+          protocol: TCP
+
+    # Allow Kubernetes API server (in-cluster)
+    # Covers both standard HTTPS (443) and kubeadm default (6443)
+    - ports:
+        - port: 443
+          protocol: TCP
+        - port: 6443
+          protocol: TCP
+
+    # Allow Prometheus scrape target (in-cluster only)
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: {{ .Values.networkPolicy.prometheusNamespace }}
+      ports:
+        - port: 9090
+          protocol: TCP
+
+    # Allow TimescaleDB (in-cluster only, only relevant when database.enabled: true)
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: {{ .Values.networkPolicy.timescaledbNamespace }}
+      ports:
+        - port: 5432
+          protocol: TCP
+{{- end }}

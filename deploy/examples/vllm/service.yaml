@@ -1,0 +1,21 @@
+# deploy/examples/vllm/service.yaml
+#
+# ClusterIP service for the vLLM example deployment.
+# IFA scrapes /metrics on port 8000 via this service's DNS name:
+#   http://vllm-example.inference.svc.cluster.local:8000/metrics
+apiVersion: v1
+kind: Service
+metadata:
+  name: vllm-example
+  namespace: inference
+  labels:
+    app: vllm-example
+spec:
+  type: ClusterIP
+  selector:
+    app: vllm-example
+  ports:
+    - name: http
+      port: 8000
+      targetPort: 8000
+      protocol: TCP
