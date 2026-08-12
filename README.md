@@ -4,7 +4,7 @@
 
 > A read-only Kubernetes-native diagnostics and recommendation system for AI inference workloads.
 
-(https://github.com/p95labs/inference-fabric-autopilot/actions/workflows/ci.yml)
+
 [![License](https://img.shields.io/badge/license-Apache%202.0-blue.svg)](./LICENSE)
 ![Status: Alpha](https://img.shields.io/badge/status-alpha-orange.svg)
 
