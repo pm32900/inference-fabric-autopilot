@@ -247,7 +247,7 @@ See [SECURITY.md](./SECURITY.md) and [docs/SECURITY_MODEL.md](./docs/SECURITY_MO
 | Phase 2 | Alpha hardening — config, dual telemetry backend, Helm | ✅ Complete |
 | Phase 2.5 | Restricted-environment readiness — air-gap, RBAC, NetworkPolicy | ✅ Complete |
 | Phase 3 | vLLM runtime validation — metrics adapter, parser, rules 9–11 | ✅ Complete |
-| Phase 4 | GPU utilization via DCGM, counter-rate computation, histogram support | 📋 Planned |
+| Phase 4 | GPU utilization via DCGM, counter-rate computation, histogram support | ✅ Complete |
 | Phase 5 | Multi-runtime support (Triton, Ollama), operator UX improvements | 📋 Planned |
 
 See [docs/ROADMAP.md](./docs/ROADMAP.md) for details.
