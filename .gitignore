@@ -1,20 +1,16 @@
-# Go binaries
 bin/
 *.exe
-
-# Go test cache
+ifa
+/Dockerfile.control-plane
+/Dockerfile.node-agent
 *.test
 *.out
-
-# Environment files
 .env
 .env.local
-
-# OS noise
+.env.example
 .DS_Store
 Thumbs.db
-
-# Editor
 .idea/
 .vscode/
 *.swp
+
