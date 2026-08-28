@@ -38,6 +38,7 @@ type PrometheusTargetConfig struct {
 	Runtime      string `yaml:"runtime"`
 	ModelName    string `yaml:"model_name"`
 	MetricsURL   string `yaml:"metrics_url"`
+	DCGMUrl      string `yaml:"dcgm_url"` // optional — DCGM Exporter /metrics endpoint for real GPU metrics
 }
 
 type KubernetesConfig struct {
