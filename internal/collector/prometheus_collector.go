@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/pm32900/inference-fabric-autopilot/internal/runtime/dcgm"
+	"github.com/pm32900/inference-fabric-autopilot/internal/runtime/triton"
 	"github.com/pm32900/inference-fabric-autopilot/internal/runtime/vllm"
 	"github.com/pm32900/inference-fabric-autopilot/internal/telemetry"
 )
@@ -121,6 +122,49 @@ func (c *PrometheusCollector) scrape(ctx context.Context, target PrometheusTarge
 		if target.DCGMUrl == "" {
 			snap.GPUUtilizationPct = v.KVCacheUsagePct
 			snap.GPUMemoryUsedPct = v.KVCacheUsagePct
+		}
+	}
+
+	if target.Runtime == "triton" {
+		snaps := triton.Parse(string(body), target.ModelName)
+		if len(snaps) == 0 {
+			fmt.Printf("warn: no Triton metrics found for model %q in %s\n", target.ModelName, target.WorkloadName)
+			return snap, nil
+		}
+		// Use the first (and typically only) matching model snapshot
+		t := snaps[0]
+
+		// GPU — Triton reports these natively; DCGM will overwrite if also configured
+		snap.GPUUtilizationPct = t.GPUUtilizationPct
+		snap.GPUMemoryUsedPct = t.GPUMemoryUsedPct
+
+		// Queue depth
+		snap.QueueDepth = t.PendingRequestCount
+
+		// Counter-derived rates
+		snap.RequestRatePerSec = c.rateTracker.Rate(
+			target.WorkloadName, "inference_success_total",
+			t.InferenceSuccessTotal, now,
+		)
+		failRate := c.rateTracker.Rate(
+			target.WorkloadName, "inference_failure_total",
+			t.InferenceFailureTotal, now,
+		)
+		totalRate := snap.RequestRatePerSec + failRate
+		if totalRate > 0 {
+			snap.ErrorRatePct = (failRate / totalRate) * 100.0
+		}
+
+		// Derive average request latency from cumulative counters.
+		// RequestDurationUsTotal / InferenceSuccessTotal gives avg microseconds per request.
+		reqDurRate := c.rateTracker.Rate(
+			target.WorkloadName, "request_duration_us_total",
+			t.RequestDurationUsTotal, now,
+		)
+		if snap.RequestRatePerSec > 0 {
+			avgLatencyMs := (reqDurRate / snap.RequestRatePerSec) / 1000.0
+			snap.P95LatencyMs = avgLatencyMs
+			snap.P50LatencyMs = avgLatencyMs
 		}
 	}
 
