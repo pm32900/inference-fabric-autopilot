@@ -1,207 +1,145 @@
-# Security Model — Inference Fabric Autopilot
+# Security model
 
-**Version:** Phase 2.5
-**Last updated:** 2026-06
+## What IFA is, from a security standpoint
 
----
+A process that makes outbound HTTP GETs to endpoints an operator listed, watches
+three Kubernetes resource types read-only, holds the results in memory, and
+serves them over an unauthenticated HTTP API.
 
-## Summary
+## Read-only by construction
 
-IFA is a read-only passive observer. It holds no write permissions on the
-cluster. It does not transmit data outside the cluster. It does not read
-inference request or response content. The attack surface is intentionally
-minimal.
+Not by policy — by the absence of any code that could do otherwise.
 
----
+- **Kubernetes.** The client is used for `List` and `Watch` on deployments, pods
+  and horizontalpodautoscalers. The ClusterRole in the chart grants `get`,
+  `list`, `watch` and nothing else; you can read it in
+  [`deploy/helm/autopilot/templates/rbac.yaml`](../deploy/helm/autopilot/templates/rbac.yaml)
+  in under a minute. See [RBAC_PERMISSIONS.md](RBAC_PERMISSIONS.md).
+- **The API.** Every handler is registered through a wrapper that rejects
+  anything but GET and HEAD. Adding a mutating endpoint means changing that
+  wrapper, which is a visible diff.
+- **Scrape targets.** IFA only ever issues GETs, and only to URLs in its
+  configuration.
 
-## Trust Boundaries
+## What IFA never sees
 
+Prompt text, completion text, request and response bodies, HTTP headers, user
+identifiers, API keys.
+
+This is a property of the interface, not a filter: IFA reads Prometheus counters
+and gauges. Those are aggregate numbers. There is no code path that reads a
+request body, because there is no request body to read.
+
+The exceptions worth stating plainly: **model names** are read from the
+`model_name` label and appear in the API, and **workload and namespace names**
+appear throughout. If your model or namespace names are themselves sensitive,
+the API is as sensitive as they are.
+
+## Outbound connections
+
+Only these, and no others:
+
+1. The `metrics_url` and `dcgm_url` of each configured target.
+2. The Kubernetes API server, when discovery is enabled.
+3. The database, when history is enabled.
+
+No licence check, no usage telemetry, no update check, no crash reporting. IFA
+runs in an air-gapped cluster without configuration beyond mirroring the image;
+see [DEPLOYMENT.md](DEPLOYMENT.md).
+
+## Container and pod posture
+
+The image is `gcr.io/distroless/static-debian12:nonroot` — no shell, no package
+manager, no `exec` target. The chart sets:
+
+```yaml
+runAsNonRoot: true
+runAsUser: 65532
+readOnlyRootFilesystem: true
+allowPrivilegeEscalation: false
+capabilities: { drop: [ALL] }
+seccompProfile: { type: RuntimeDefault }
 ```
-┌─────────────────────────────────────────────────┐
-│  Kubernetes Cluster (trusted boundary)          │
-│                                                 │
-│  ┌────────────────────┐                         │
-│  │  inference ns      │  IFA pods run here      │
-│  │                    │  NetworkPolicy: deny     │
-│  │  control-plane ────┼──► K8s API (read-only)  │
-│  │  node-agent        │  ◄── Prometheus (pull)  │
-│  └────────────────────┘                         │
-│                                                 │
-│  Cluster boundary — no data crosses this line   │
-└─────────────────────────────────────────────────┘
 
-┌─────────────────────────────────────────────────┐
-│  Operator workstation (trusted, out-of-band)    │
-│                                                 │
-│  ifa CLI ──► kubectl port-forward ──► API :8080 │
-└─────────────────────────────────────────────────┘
+`/tmp` is an in-memory `emptyDir` because the root filesystem is read-only. The
+image runs as uid 65532 to match the `securityContext`; a mismatch there is the
+usual cause of a `CreateContainerConfigError`.
 
-External internet: NOT reachable from IFA pods at runtime.
-```
+## Handling untrusted input
 
----
+Scrape payloads are attacker-influenced: whoever controls a watched pod controls
+what IFA parses.
 
-## Kubernetes RBAC Posture
+- **Bounded reads.** Every response is capped (`max_body_bytes`, default 8 MiB)
+  and read through an `io.LimitReader`; a body that exceeds the cap is refused
+  rather than truncated and misinterpreted.
+- **Bounded time.** Every scrape carries a hard timeout, and the timeout is
+  validated to be shorter than the interval so a hung target cannot cause
+  scrapes to pile up.
+- **No redirect following.** A target cannot send the collector somewhere it was
+  not configured to go.
+- **Scheme restriction.** Target URLs must be `http` or `https` with a host,
+  checked at config load. Scrape targets come from a ConfigMap, which more
+  people can usually edit than can edit the Deployment.
+- **Parser.** No regular expressions, no reflection, no recursion. Allocation is
+  proportional to input, and input is capped. Malformed lines are counted and
+  skipped; a single bad line from an unrelated exporter does not blind the
+  collector to the rest of the payload.
+- **Nothing parsed is executed.** Values become floats and labels become map
+  keys. Nothing is interpolated into a query — the database sink uses bound
+  parameters exclusively — or written to disk.
 
-IFA uses a single `ClusterRole` with **read-only verbs only**: `get`, `list`, `watch`.
+## Secrets
 
-Resources accessed:
-- `pods`, `nodes`, `namespaces` (core API group)
-- `deployments`, `daemonsets`, `replicasets` (apps API group)
+The database DSN is the only credential IFA holds. It is read from
+`IFA_DATABASE_DSN`, sourced from a Secret by the chart, and never from the
+ConfigMap the rest of the configuration lives in. It is redacted in the startup
+log line, which is otherwise a reliable way to leak a password into a shared log
+store.
 
-**No write verbs are granted.** There is no `create`, `update`, `patch`,
-`delete`, `deletecollection`, or `escalate` in any IFA role.
+## Server hardening
 
-See [RBAC_PERMISSIONS.md](./RBAC_PERMISSIONS.md) for the full annotated permission set.
-
----
-
-## What IFA Can Read from the Cluster
-
-| Resource | Fields used | Purpose |
-|---|---|---|
-| Pod | `name`, `namespace`, `labels`, `status.phase`, `spec.nodeName` | Identify running inference workloads |
-| Node | `name`, `status.conditions`, `status.capacity` | Node health context |
-| Deployment | `name`, `namespace`, `spec.replicas`, `status.readyReplicas` | Replica count for RPS-per-replica rule |
-| DaemonSet | `name`, `namespace`, `status` | Agent health tracking |
-| Namespace | `name` | Namespace enumeration |
-
-**IFA does not read:** ConfigMaps, Secrets, ServiceAccounts, RBAC resources,
-admission webhooks, or any resource in `kube-system`.
+`ReadHeaderTimeout` is set (default 5s), which is the one HTTP timeout whose
+absence lets a single idle connection hold a goroutine open indefinitely.
+`ReadTimeout`, `WriteTimeout`, `IdleTimeout` and `MaxHeaderBytes` are also set.
 
 ---
 
-## What IFA Does Not Collect
+## What this does not defend against
 
-The following data is **never read, stored, or transmitted** by IFA:
+Stated plainly, because a security section that lists only strengths is not one.
 
-| Data type | Status | Notes |
-|---|---|---|
-| Prompt bodies | Never collected | IFA scrapes only Prometheus `/metrics`, not inference API endpoints |
-| Response bodies | Never collected | Same as above |
-| HTTP request headers | Never collected | Not part of Prometheus metric format |
-| User identifiers / tokens | Never collected | Not accessible via `/metrics` |
-| Model weights or files | Never collected | IFA has no access to model storage |
-| Kubernetes Secrets | Never collected | Not in RBAC grant |
-| ConfigMaps | Never collected | Not in RBAC grant |
-| Inter-pod network traffic | Never collected | No packet capture, no eBPF |
+**The API is unauthenticated and unencrypted.** Anyone who can reach the port
+can read operational metadata about your inference fleet: workload names, model
+names, namespaces, queue depths, latencies, replica counts. That is not a
+credential, but it is reconnaissance, and in some organisations model names are
+themselves confidential. Network-level restriction is the only control. Enable
+the chart's NetworkPolicy, or put an authenticating proxy in front, or both.
 
-See [DATA_COLLECTION.md](./DATA_COLLECTION.md) for the complete field-level list.
+**Denial of service against the API.** There is no rate limiting and no request
+quota. `/api/v1/recommendations` runs the rule engine synchronously, so it is the
+most expensive endpoint and the obvious target. Restrict who can reach it.
 
----
+**A compromised scrape target can degrade IFA.** It cannot execute anything, but
+it can serve 8 MiB of valid exposition on every scrape and consume parsing time,
+or serve values engineered to trigger findings. Nothing IFA does in response
+changes any state, so the blast radius is misleading output.
 
-## What IFA Does Collect
+**A stolen ServiceAccount token grants read access.** The token can list
+deployments, pods and HPAs in scope. Pod specs can contain environment variables,
+so this is not nothing. Prefer `rbac.scope: namespace`.
 
-IFA collects only **aggregated performance metrics** from the Prometheus
-`/metrics` endpoint exposed by inference runtimes:
+**Findings can be wrong.** The rules are thresholds over interpolated
+percentiles from someone else's metrics. Acting on a finding without checking
+its evidence is acting on a guess. This is a large part of why IFA is read-only
+([ADR 0001](adr/0001-read-only.md)) and why every finding carries the numbers
+behind it.
 
-- GPU utilisation percentage
-- GPU memory used percentage
-- P95 request latency (milliseconds)
-- Time-to-first-token P95 (milliseconds)
-- Request queue depth
-- Error rate percentage
-- Requests per second
-- KV-cache usage percentage
-- Workload name, namespace, runtime type, model name (metadata labels)
+**No supply-chain attestation yet.** Released images are not signed and no SBOM
+is published. Both are on the roadmap; neither exists today.
 
-These are infrastructure-level counters. None of them contain user data.
+**No audit log.** IFA does not record who queried it.
 
----
+## Reporting a vulnerability
 
-## Network Exposure
-
-### Control plane pod
-
-- Listens on TCP 8080 inside the cluster only.
-- No `Ingress` or `LoadBalancer` Service is created by default.
-- Access is via `ClusterIP` service or `kubectl port-forward`.
-- In air-gapped mode, a `NetworkPolicy` enforces default-deny-egress
-  on the `inference` namespace with explicit allow-only rules for
-  in-cluster destinations.
-
-### Node agent pod
-
-- No listening port. Outbound only (to control plane, future use).
-- Current stub makes no network calls.
-
----
-
-## Image Supply Chain
-
-### Standard mode
-- Images pulled from wherever `controlPlane.image.repository` is set.
-- Operator is responsible for image provenance.
-
-### Air-gapped mode
-- Images must be pre-loaded via `scripts/load-airgap-bundle.sh` or
-  pushed to an internal registry before deployment.
-- `imagePullPolicy: Never` prevents any pull attempt at runtime.
-- The export script (`scripts/export-airgap-bundle.sh`) produces
-  `checksums.sha256` alongside each image tarball for integrity verification.
-- IFA does not sign images itself. If your environment requires image signing
-  (e.g. Cosign, Notary), that is the operator's responsibility.
-
----
-
-## Secrets Management
-
-IFA currently has one optional secret: the TimescaleDB DSN.
-
-- In development it is stored in `config.yaml` (plaintext, local only).
-- In Kubernetes, the DSN should be passed via a Kubernetes Secret mounted
-  as an environment variable, not hardcoded in the ConfigMap.
-- The Helm chart does not currently automate Secret creation. The operator
-  must create it manually and reference it in `values.yaml`.
-
-No other credentials, API keys, or tokens are used by IFA.
-
----
-
-## Threat Model
-
-### Threats considered and mitigated
-
-| Threat | Mitigation |
-|---|---|
-| IFA pod compromised — attacker escalates to cluster write | No write verbs in ClusterRole. Compromise is limited to read access on listed resources. |
-| IFA exfiltrates inference data | IFA never reads inference API endpoints. Only Prometheus `/metrics` is scraped. |
-| IFA makes outbound calls to exfiltrate data | NetworkPolicy (air-gapped mode) blocks all egress except explicit in-cluster allowlist. Standard mode relies on cluster-level egress controls. |
-| Malicious image injected into air-gapped bundle | Checksums provided. Operator should verify before loading. |
-| TimescaleDB DSN leaked via ConfigMap | DSN should be in a Kubernetes Secret, not in the ConfigMap. See Secrets Management above. |
-| Control plane API abused to enumerate cluster state | API is read-only and only accessible in-cluster or via port-forward. No auth on the HTTP API currently — see Limitations. |
-
-### Threats not yet mitigated (known gaps)
-
-| Gap | Notes |
-|---|---|
-| HTTP API has no authentication | The `/telemetry` and `/recommendations` endpoints are unauthenticated. Anyone with network access to port 8080 can read them. Acceptable for alpha with port-forward access only. Should be addressed before any external exposure. |
-| No TLS on the HTTP API | All traffic is plaintext inside the cluster. Acceptable for in-cluster ClusterIP + port-forward. Would need TLS termination before any in-cluster multi-tenant exposure. |
-| Node agent has no mutual auth with control plane | Currently a stub. Will need to be addressed when the agent sends real data. |
-| No audit log | IFA does not log who called which API endpoint. Adding request logging is low-effort and should be done before production use. |
-
----
-
-## Security Posture by Deployment Mode
-
-| Control | Standard mode | Air-gapped mode |
-|---|---|---|
-| Read-only RBAC | Yes | Yes |
-| No external API calls | Yes | Yes (enforced by NetworkPolicy) |
-| No prompt/response collection | Yes | Yes |
-| NetworkPolicy | Not applied | Applied (default-deny-egress) |
-| imagePullPolicy | IfNotPresent | Never |
-| Image registry | Configurable | Internal registry only |
-| Egress config flag | `egress.enabled: true` | `egress.enabled: false` |
-
----
-
-## Compliance Notes
-
-IFA does not process personal data as defined under GDPR, CCPA, or similar
-regulations, because it does not read prompt or response content, user
-identifiers, or any user-attributable data. The metrics it collects are
-infrastructure counters equivalent to CPU utilisation or request throughput.
-
-This is a design property, not a legal opinion. Operators should conduct their
-own review before deploying in regulated environments.
+See [SECURITY.md](../SECURITY.md).

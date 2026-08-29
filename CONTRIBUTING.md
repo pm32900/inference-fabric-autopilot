@@ -1,108 +1,89 @@
-# Contributing to P95 Autopilot
+# Contributing
 
-Thank you for your interest. P95 Autopilot is an alpha-stage project and contributions
-are welcome, with the understanding that the API, data model, and architecture are still
-evolving.
+IFA is alpha. The API, the data model and the rule set are all still moving, so
+open an issue before starting anything non-trivial — it saves you the work if it
+conflicts with where the project is going. [docs/ROADMAP.md](docs/ROADMAP.md)
+says where that is.
 
-## Before you contribute
+## The most useful contribution right now
 
-Please open an issue before starting work on a non-trivial change. This avoids wasted
-effort if the change conflicts with the current roadmap direction.
+Not code: **`ifa check` output from a real vLLM or Triton server.**
 
-See [docs/ROADMAP.md](./docs/ROADMAP.md) for where the project is heading.
+Every adapter here is built and tested against fixtures constructed from each
+runtime's own metric definitions. That catches a lot, but a fixture built from a
+spec and a real payload are not the same artifact — the first version of this
+project's vLLM adapter passed all of its tests and could not read a real server,
+because real vLLM labels every series and the fixture did not.
 
-## Project constraints
-
-These are hard constraints. Contributions that violate them will not be merged:
-
-- **Read-only.** P95 Autopilot must never create, update, patch, or delete Kubernetes resources. It observes — it does not act.
-- **No autonomous remediation.** The system produces recommendations for humans to act on. It does not apply changes to workloads automatically.
-- **No sensitive payload collection.** Do not add code that reads prompt bodies, response bodies, request headers, or user identifiers.
-- **Go only** for the control plane, CLI, and node agent. No additional language runtimes.
-- **No new required external dependencies** without discussion. The project aims to stay deployable with minimal cluster footprint.
-
-## Development setup
-
-**Requirements:**
-- Go 1.21+
-- Docker (for building images and running kind)
-- kind (for local Kubernetes)
-- kubectl
-- helm 3+
-
-**Clone and build:**
 ```bash
-git clone https://github.com/<your-username>/inference-fabric-autopilot.git
+ifa check http://your-vllm:8000/metrics -runtime vllm -model your-model
+```
+
+Paste the output and the runtime version into an issue. It takes ten seconds and
+it is the difference between "implemented" and "validated" on the roadmap.
+
+## Hard constraints
+
+Changes that violate these will not be merged.
+
+- **Read-only.** IFA never creates, updates, patches or deletes anything in
+  Kubernetes, and never execs into a pod. The permission set is `get`, `list`,
+  `watch`. See [ADR 0001](docs/adr/0001-read-only.md).
+- **No remediation.** Output is advice for a human. Automation belongs on top of
+  the API, not inside the process.
+- **No payload collection.** No prompt bodies, response bodies, request headers
+  or user identifiers. IFA reads aggregate counters and gauges.
+- **No invented data.** If a runtime does not expose a signal, the field stays
+  unmeasured. Do not derive an error rate from a success counter, publish a mean
+  as a percentile, or substitute one percentage for another because the units
+  match. This is the single easiest way to make the project untrustworthy.
+- **Small dependency set.** The runtime dependencies are client-go, pgx and
+  yaml. Adding one needs a reason in the pull request.
+
+## Getting set up
+
+Go 1.24 or newer, and nothing else for building, testing and running the demo.
+
+```bash
+git clone https://github.com/pm32900/inference-fabric-autopilot
 cd inference-fabric-autopilot
-go build ./...
+make demo      # see it work
+make verify    # what CI runs
 ```
 
-**Run tests:**
-```bash
-go test ./...
-go vet ./...
-```
+[docs/DEVELOPMENT.md](docs/DEVELOPMENT.md) covers the layout, and has worked
+examples for the two most common changes: adding a rule, and adding a runtime
+adapter.
 
-**Run locally (no cluster needed):**
-```bash
-bash scripts/run-local.sh
-```
+## What a good change looks like
 
-The control plane starts on `http://localhost:8080` in simulated collector mode.
-No Kubernetes cluster or database is required for local development.
+**A new rule** combines signals where one is ambiguous, requires the condition to
+persist, carries the numbers that triggered it, and suggests something a human
+can do. It is tested at the boundary, one step below the boundary, with a
+required input unmeasured, and against the healthy control. It is documented in
+[docs/RECOMMENDATIONS.md](docs/RECOMMENDATIONS.md) in the same pull request.
 
-## Making changes
+**A new runtime adapter** is a pure function with a fixture built from that
+runtime's own metric definitions, including the labels it really emits. It
+reports missing metrics rather than defaulting them to zero.
 
-1. Fork the repository and create a branch from `main`.
-2. Name your branch descriptively: `feat/vllm-histogram-support`, `fix/ttft-parsing`, `docs/operations-runbook`.
-3. Keep commits focused. One logical change per commit.
-4. Run `go test ./...` and `go vet ./...` before pushing.
-5. Open a pull request against `main` with a clear description of what changed and why.
+**A bug fix** comes with the test that fails without it. If the bug was a
+misreading of a runtime's semantics — a fraction treated as a percentage, a
+counter treated as a gauge — say so in a comment where the fix is, so the next
+person does not re-derive it.
 
-## Pull request guidelines
+## Pull requests
 
-- Describe the problem being solved, not just the implementation.
-- Include test coverage for new logic. Table-driven tests are preferred.
-- Do not add or remove comments unless that is the explicit purpose of the PR.
-- Do not reformat unrelated code in the same PR.
-- Keep PRs small and reviewable. Large PRs will be asked to be split.
+- One logical change per PR.
+- `make verify` passes.
+- Commit messages explain why, not what; the diff already says what.
+- Comments in code explain why, not what. If a comment restates the line below
+  it, delete one of them.
 
-## Adding a new recommender rule
+## Code of conduct
 
-Rules live in `internal/recommender/recommender.go`. Each rule must:
+[CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md).
 
-1. Have a clearly numbered comment (`// ── Rule N: ...`).
-2. Be tested in `internal/recommender/recommender_test.go` with both a firing and a non-firing case.
-3. Include a `RelatedMetric` field naming the Prometheus metric or Kubernetes field that triggered it.
-4. Not fire for runtimes it does not apply to (guard with `snap.Runtime == "vllm"` or similar).
+## Licence
 
-## Adding a new runtime adapter
-
-Runtime-specific parsing lives in `internal/runtime/<runtime-name>/`. Follow the pattern
-established in `internal/runtime/vllm/`:
-
-- `metrics.go` — metric name constants and a snapshot struct
-- `parser.go` — `Parse(prometheusText string) Snapshot` function
-- `parser_test.go` — table-driven tests with fixture payloads
-
-## Code style
-
-- Follow standard Go idioms and `gofmt` formatting.
-- No global state outside of `main()`.
-- Exported functions must have a doc comment.
-- Errors must be wrapped with `fmt.Errorf("context: %w", err)` — do not discard errors.
-- Do not log and return an error — choose one.
-
-## Reporting bugs
-
-Use the GitHub issue tracker. Include:
-- What you did
-- What you expected
-- What actually happened
-- Go version, OS, Kubernetes version if relevant
-- Relevant log output
-
-## License
-
-By contributing, you agree that your contributions will be licensed under the
-[Apache 2.0 License](./LICENSE).
+Contributions are accepted under Apache 2.0.
