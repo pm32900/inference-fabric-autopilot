@@ -31,9 +31,9 @@ problem each one addresses and the validations that apply to it.
 
 1. Reads the queue and works out the next change-set by looking at the state of
    existing pull requests. There is no progress file to get out of sync.
-2. Branches from the current `main` and cherry-picks that change-set, rewriting
-   the author date to the time of the run so the history reflects when the change
-   was reviewed and landed.
+2. Branches from the current `main` and cherry-picks that change-set, leaving
+   the commit exactly as it was written — same author, same author date, same
+   message — plus the `(cherry picked from commit …)` line git adds.
 3. Runs the validations for that change-set — always vet, build and the race
    detector; additionally Helm rendering, shellcheck, the benchmarks or the demo
    where the change-set touches them.
@@ -69,8 +69,28 @@ roadmap item. It does not start that work. At that point:
 ## Attribution
 
 The change-sets on `audit/staging` were written by an AI assistant working from a
-detailed audit brief. They land authored by the person who directed the work,
-reviews each pull request and merges it, with `Co-Authored-By: Claude` recorded on
-every commit and a `(cherry picked from commit …)` trailer recording where each
-one was replayed from. Both are set in the workflow's `env:` block if you want to
-change them.
+detailed audit brief, and they land attributed to it. The migration does not
+rewrite the author, the author date or the message of a commit it replays; the
+only line it adds is the `(cherry picked from commit …)` trailer git itself
+writes, which records where the commit came from.
+
+Three consequences worth stating plainly:
+
+- These commits do not count as contributions by the repository owner, because
+  they were not written by them. Reviewing and merging is real work, and it is
+  recorded as exactly that — in the pull request and the merge, not in the
+  authorship of code someone else wrote.
+- The `committer` line on a replayed commit is the identity configured in
+  `FIXUP_AUTHOR_NAME`/`FIXUP_AUTHOR_EMAIL`, because git requires one to commit
+  at all. Committer means "who applied this", not "who wrote it".
+- Fix-ups the migration makes when a validation fails are its own work and are
+  authored under that same identity. There is no `Co-Authored-By` trailer on
+  them; the author line already says who wrote them, and repeating it would add
+  nothing.
+
+One inconsistency is deliberate. Change-set 02 and the two bootstrap commits
+landed before this policy and carry the older attribution — author rewritten to
+the repository owner, author date rewritten to the merge time, and a
+`Co-Authored-By: Claude` trailer. They are already on `main`, and rewriting
+merged history to tidy that up would be a worse outcome than the inconsistency.
+They stay as they are.
