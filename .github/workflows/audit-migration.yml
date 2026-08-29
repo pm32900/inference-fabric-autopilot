@@ -1,0 +1,208 @@
+name: Audit migration
+
+# Lands one change-set from audit/staging onto main per day, in dependency
+# order, behind the same review gate a human pull request goes through.
+#
+# The schedule is in UTC. `0 4 * * *` is 09:30 IST / 04:00 UTC — change it to
+# whatever hour suits you. GitHub's scheduler is best-effort and runs late under
+# load, sometimes by tens of minutes; nothing here depends on the exact time.
+#
+# Requires two repository secrets:
+#
+#   CLAUDE_CODE_OAUTH_TOKEN  from `claude setup-token`
+#   GH_PAT                   fine-grained PAT: Contents RW, Pull requests RW,
+#                            Workflows RW (change-set 05 edits ci.yml, and
+#                            pushing workflow files needs that permission)
+#
+# GH_PAT rather than GITHUB_TOKEN is not a preference. Branches and pull
+# requests created with GITHUB_TOKEN do not trigger other workflows, so the
+# required Verify check would never run, auto-merge would never fire, and the
+# migration would stall on day one with no error anywhere.
+#
+# To stop the migration: disable this workflow in the Actions tab. To stop it
+# permanently, delete it — nothing else depends on it.
+
+on:
+  schedule:
+    - cron: "0 4 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: audit-migration
+  cancel-in-progress: false
+
+env:
+  # Attribution for the landed commits. The change-sets on audit/staging were
+  # committed by an assistant working from Prajwal's direction; these land them
+  # under the author who directed and reviews them, with the assistance recorded
+  # in a trailer. Change COMMIT_AUTHOR_* if you want different attribution, and
+  # clear COMMIT_COAUTHOR if you do not want the trailer.
+  COMMIT_AUTHOR_NAME: "Prajwal Moras"
+  COMMIT_AUTHOR_EMAIL: "prajwalmoras19@gmail.com"
+  COMMIT_COAUTHOR: "Claude <noreply@anthropic.com>"
+
+jobs:
+  migrate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.GH_PAT }}
+
+      - name: Decide what to land
+        id: plan
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+        run: scripts/audit-migration/plan.sh
+
+      # ---------------------------------------------------------------- land
+
+      - uses: actions/setup-go@v5
+        if: steps.plan.outputs.status == 'proceed'
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Prepare the branch
+        id: prepare
+        if: steps.plan.outputs.status == 'proceed'
+        env:
+          CS_SHA: ${{ steps.plan.outputs.sha }}
+          CS_BRANCH: ${{ steps.plan.outputs.branch }}
+        run: scripts/audit-migration/prepare.sh
+
+      - name: Helm
+        if: steps.plan.outputs.status == 'proceed' && contains(steps.plan.outputs.validate, 'helm')
+        uses: azure/setup-helm@v4
+        with:
+          version: v3.16.3
+
+      - name: Validate, fix if needed, and open the pull request
+        if: steps.plan.outputs.status == 'proceed'
+        uses: anthropics/claude-code-action@v1
+        with:
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          github_token: ${{ secrets.GH_PAT }}
+          claude_args: --allowedTools "Bash,Read,Edit,Write,Glob,Grep" --max-turns 60
+          prompt: |
+            You are landing one prepared change-set of a staged migration onto
+            main. The branch `${{ steps.plan.outputs.branch }}` is already
+            checked out in the working directory with the change applied.
+
+            Change-set ${{ steps.plan.outputs.id }}: ${{ steps.plan.outputs.title }}
+
+            The engineering problem it addresses:
+            ${{ steps.plan.outputs.problem }}
+
+            Cherry-pick left conflicts: ${{ steps.prepare.outputs.conflict }}
+            Validations required for this change-set: ${{ steps.plan.outputs.validate }}
+
+            Do the following, in order.
+
+            1. If the cherry-pick left conflicts, resolve them. Resolve toward
+               the intent of the incoming change-set — it is a deliberate
+               rewrite of what is on main, so where the two disagree the
+               incoming side is almost always right. Then `git add` the
+               resolved files and `git -c core.editor=true cherry-pick
+               --continue`. If a conflict is not mechanically resolvable —
+               main has changed in a way that genuinely contradicts the
+               change-set — stop, push nothing, and open an issue titled
+               "audit-migration ${{ steps.plan.outputs.id }} needs a human"
+               explaining precisely what conflicts and why. Then finish.
+
+            2. Run the validations listed above. The mapping is:
+                 fmt        gofmt -l -s $(git ls-files '*.go')   (must be empty)
+                 vet        go vet ./...
+                 build      go build ./...
+                 test       go test -count=1 ./...
+                 race       go test -race -count=1 ./...
+                 bench      go test -run '^$' -bench . -benchtime 10x ./internal/promtext/...
+                 helm       helm lint deploy/helm/autopilot && helm template autopilot deploy/helm/autopilot >/dev/null
+                 shellcheck sudo apt-get install -y shellcheck && shellcheck scripts/*.sh
+                 actionlint go run github.com/rhysd/actionlint/cmd/actionlint@latest
+                 demo       make build && ./scripts/demo.sh in the background, then check
+                            /api/v1/recommendations returns a non-zero count, then kill it
+                 links      check every relative markdown link in README.md and docs/ resolves
+
+               Skip any tool that is genuinely unavailable on the runner and say
+               so in the pull request body. Do not skip one because it failed.
+
+            3. If a validation fails, fix it on this branch. Fix the actual
+               defect — do not delete the failing test, loosen the assertion,
+               or skip the check. Commit the fix as a separate commit with a
+               message explaining what broke and why, using the same author
+               identity already configured in git config. Re-run the
+               validation. If after three attempts it still fails, push the
+               branch, open the pull request as a DRAFT explaining exactly what
+               fails, and do not enable auto-merge.
+
+            4. Push the branch and open the pull request. Title it exactly:
+                 ${{ steps.plan.outputs.title }}
+               Write the body yourself, in plain prose, covering: the problem
+               this solves, the root cause, what the implementation does, how it
+               is tested, and any trade-off a reviewer should know about. Ground
+               every claim in the actual diff — read it. No emoji, no headings
+               like "Summary" followed by three bullets, no invented benchmark
+               numbers, no "production ready". If something in the change-set is
+               a known limitation, say so. Aim for the length a careful engineer
+               would write, which for a large change-set is several paragraphs
+               and for a small one is a short one.
+
+            5. Enable auto-merge with rebase:
+                 gh pr merge --rebase --auto <number>
+               Do not use --admin and do not merge manually. If auto-merge is
+               refused, leave the pull request open and say why in a comment.
+
+            Constraints. Never push to main. Never force-push. Do not touch any
+            file the cherry-pick did not touch, except to fix a validation this
+            change-set broke. Do not add features, dependencies, or files that
+            are not part of this change-set.
+
+      # ------------------------------------------------------------ finished
+
+      - name: Report completion
+        if: steps.plan.outputs.status == 'done'
+        uses: anthropics/claude-code-action@v1
+        with:
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          github_token: ${{ secrets.GH_PAT }}
+          claude_args: --allowedTools "Bash,Read,Glob,Grep" --max-turns 30
+          prompt: |
+            Every change-set in .github/audit-migration/queue.json has merged.
+
+            Open one issue titled "Audit migration complete" that:
+              - lists what landed, one line each, with the pull request number;
+              - states that this workflow will not open any further pull
+                requests, and that .github/workflows/audit-migration.yml and
+                scripts/audit-migration/ can now be deleted;
+              - notes that .github/workflows/verify.yml has been superseded by
+                ci.yml from change-set 05, so branch protection should be
+                switched to require the CI checks and verify.yml deleted;
+              - reads docs/ROADMAP.md and recommends the single next
+                highest-value item, with a short argument for why that one over
+                the others.
+
+            Recommend it. Do not implement it, do not open a pull request, and
+            do not start any work.
+
+      - name: Nothing to do
+        if: steps.plan.outputs.status != 'proceed' && steps.plan.outputs.status != 'done'
+        run: |
+          echo "status: ${{ steps.plan.outputs.status }}"
+          echo "change-set: ${{ steps.plan.outputs.id }}"
+          echo "${{ steps.plan.outputs.url }}"
+          {
+            echo "### Audit migration: ${{ steps.plan.outputs.status }}"
+            echo
+            case "${{ steps.plan.outputs.status }}" in
+              waiting) echo "Change-set ${{ steps.plan.outputs.id }} is still open and unmerged. Nothing was started." ;;
+              blocked) echo "Change-set ${{ steps.plan.outputs.id }} was closed without merging, so the migration is paused. Reopen or delete that pull request to continue." ;;
+            esac
+            echo
+            echo "${{ steps.plan.outputs.url }}"
+          } >> "$GITHUB_STEP_SUMMARY"
