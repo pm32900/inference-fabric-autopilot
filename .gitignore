@@ -1,16 +1,21 @@
-bin/
+# Build output
+/bin/
+/dist/
 *.exe
-ifa
-/Dockerfile.control-plane
-/Dockerfile.node-agent
 *.test
-*.out
+
+# Coverage
+coverage.out
+coverage.html
+
+# Local overrides — never commit a DSN
 .env
 .env.local
-.env.example
-.DS_Store
-Thumbs.db
+config.local.yaml
+
+# Editors and OS
 .idea/
 .vscode/
 *.swp
-
+.DS_Store
+Thumbs.db
