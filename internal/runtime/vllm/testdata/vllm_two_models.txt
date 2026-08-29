@@ -1,0 +1,41 @@
+# One vLLM process serving two models. Aggregating across them would report a
+# queue depth and a cache utilisation that belong to neither workload, so the
+# adapter must filter on model_name.
+# TYPE vllm:num_requests_running gauge
+vllm:num_requests_running{model_name="model-a",engine="0"} 2.0
+vllm:num_requests_running{model_name="model-b",engine="0"} 30.0
+# TYPE vllm:num_requests_waiting gauge
+vllm:num_requests_waiting{model_name="model-a",engine="0"} 0.0
+vllm:num_requests_waiting{model_name="model-b",engine="0"} 41.0
+# TYPE vllm:kv_cache_usage_perc gauge
+vllm:kv_cache_usage_perc{model_name="model-a",engine="0"} 0.12
+vllm:kv_cache_usage_perc{model_name="model-b",engine="0"} 0.97
+# TYPE vllm:generation_tokens_total counter
+vllm:generation_tokens_total{model_name="model-a",engine="0"} 500.0
+vllm:generation_tokens_total{model_name="model-b",engine="0"} 900000.0
+# TYPE vllm:prompt_tokens_total counter
+vllm:prompt_tokens_total{model_name="model-a",engine="0"} 1200.0
+vllm:prompt_tokens_total{model_name="model-b",engine="0"} 2400000.0
+# TYPE vllm:request_success_total counter
+vllm:request_success_total{model_name="model-a",engine="0",finished_reason="stop"} 40.0
+vllm:request_success_total{model_name="model-b",engine="0",finished_reason="stop"} 7000.0
+# TYPE vllm:time_to_first_token_seconds histogram
+vllm:time_to_first_token_seconds_bucket{model_name="model-a",engine="0",le="0.1"} 40.0
+vllm:time_to_first_token_seconds_bucket{model_name="model-a",engine="0",le="+Inf"} 40.0
+vllm:time_to_first_token_seconds_count{model_name="model-a",engine="0"} 40.0
+vllm:time_to_first_token_seconds_sum{model_name="model-a",engine="0"} 1.6
+vllm:time_to_first_token_seconds_bucket{model_name="model-b",engine="0",le="0.1"} 0.0
+vllm:time_to_first_token_seconds_bucket{model_name="model-b",engine="0",le="10.0"} 7000.0
+vllm:time_to_first_token_seconds_bucket{model_name="model-b",engine="0",le="+Inf"} 7000.0
+vllm:time_to_first_token_seconds_count{model_name="model-b",engine="0"} 7000.0
+vllm:time_to_first_token_seconds_sum{model_name="model-b",engine="0"} 42000.0
+# TYPE vllm:e2e_request_latency_seconds histogram
+vllm:e2e_request_latency_seconds_bucket{model_name="model-a",engine="0",le="1.0"} 40.0
+vllm:e2e_request_latency_seconds_bucket{model_name="model-a",engine="0",le="+Inf"} 40.0
+vllm:e2e_request_latency_seconds_count{model_name="model-a",engine="0"} 40.0
+vllm:e2e_request_latency_seconds_sum{model_name="model-a",engine="0"} 20.0
+vllm:e2e_request_latency_seconds_bucket{model_name="model-b",engine="0",le="1.0"} 0.0
+vllm:e2e_request_latency_seconds_bucket{model_name="model-b",engine="0",le="60.0"} 7000.0
+vllm:e2e_request_latency_seconds_bucket{model_name="model-b",engine="0",le="+Inf"} 7000.0
+vllm:e2e_request_latency_seconds_count{model_name="model-b",engine="0"} 7000.0
+vllm:e2e_request_latency_seconds_sum{model_name="model-b",engine="0"} 210000.0

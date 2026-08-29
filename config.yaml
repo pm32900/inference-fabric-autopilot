@@ -1,30 +1,125 @@
-# Inference Fabric Autopilot config file
-# Edit file to match env
+# Inference Fabric Autopilot — control plane configuration.
+#
+# This file ships with no scrape targets: IFA does nothing until it is told what
+# to watch. To see it working without editing anything, run the control plane
+# with --demo, which points it at a simulated fleet.
+#
+# Every key is documented in docs/CONFIGURATION.md. Unknown keys are a startup
+# error rather than a silent no-op, so a typo in a threshold cannot leave you
+# believing you have tuned something you have not.
+
+cluster_name: default
 
 server:
-  port: 8080
-
-collector:
-    mode: simulated     # simulated or prometheus
-    interval_seconds: 5 # how often to collect or simulate telemetry
-
-kubernetes:
-  enabled: false        # set to true when running inside a cluster
-  namespace: inference  # namespace to watch for inference workloads
-
-database:
-  enabled: false        # set to true when TimescaleDB is running
-  dsn: "postgres://postgres:autopilot@localhost:5432/autopilot?sslmode=disable"
-
-recommender:
-  thresholds:
-    low_gpu_util_pct:    30.0
-    high_gpu_mem_pct:    85.0
-    high_p95_latency_ms: 500.0
-    high_queue_depth:    10
-    high_error_rate_pct: 2.0
-    min_replicas_for_rps: 10.0    # rps per replica above which we suggest scaling
+  address: ":8080"
+  # Bounds how long a client may take to send request headers. Without it a
+  # single idle connection can hold a goroutine open indefinitely.
+  read_header_timeout: 5s
+  read_timeout: 15s
+  write_timeout: 30s
+  idle_timeout: 60s
+  shutdown_timeout: 10s
 
 logging:
-  level: info         # "debug", "info", "warn", "error"
-  format: text        # "text" or "json"
+  level: info    # debug | info | warn | error
+  format: json   # json | text — text is easier to read locally
+
+collector:
+  # How often each target is scraped. Rules that require a condition to persist
+  # need several scrapes inside their sustain window, so an interval much
+  # larger than sustain_for/4 will keep them from ever firing.
+  interval: 15s
+  # Must be shorter than the interval, so a slow target cannot cause scrapes to
+  # overlap indefinitely.
+  timeout: 10s
+  # How many targets are scraped in parallel.
+  concurrency: 8
+  # Cap on a single response body. A misconfigured URL pointing at something
+  # that streams would otherwise be able to exhaust this process's memory.
+  max_body_bytes: 8388608
+
+  targets: []
+  # Example — a vLLM deployment with GPU metrics from a DCGM Exporter:
+  #
+  # targets:
+  #   - name: chat-llama3-8b
+  #     namespace: inference
+  #     runtime: vllm                     # vllm | triton
+  #     # Required when one server hosts several models; it is matched against
+  #     # the model_name label vLLM puts on every series.
+  #     model_name: meta-llama/Llama-3.1-8B-Instruct
+  #     metrics_url: http://chat-llama3-8b.inference.svc:8000/metrics
+  #     # Optional. Without it, GPU utilisation and memory are NOT measured and
+  #     # the GPU rules stay dormant — no inference runtime reports device
+  #     # utilisation itself.
+  #     dcgm_url: http://dcgm-exporter.gpu-operator.svc:9400/metrics
+  #     # Defaults to `name`. Set it when the Deployment is named differently;
+  #     # it is how replica counts are joined for the scaling rules.
+  #     deployment: chat-llama3-8b
+
+telemetry:
+  # In-memory retention. Bounded by both count and age: the count bound caps
+  # memory, the age bound keeps a workload that stopped reporting from being
+  # diagnosed on stale data. Must comfortably exceed the recommender's
+  # sustain_for, or trend-based rules will never have enough history.
+  retention_samples: 120
+  retention_period: 15m
+
+kubernetes:
+  # Discovery supplies replica counts, which the scaling rules need. It is not
+  # required for scraping or diagnosis.
+  enabled: false
+  # Empty watches all namespaces, which needs a ClusterRole. A single namespace
+  # only needs a Role — see docs/RBAC_PERMISSIONS.md.
+  namespace: inference
+  # Narrows discovery to inference workloads, e.g. "inference.io/runtime".
+  label_selector: ""
+  resync_period: 10m
+
+database:
+  # Optional long-term history in TimescaleDB. Diagnostics never read from it:
+  # the rule engine only uses the in-memory window, so a database outage costs
+  # you history, not analysis.
+  enabled: false
+  # Leave empty here and set IFA_DATABASE_DSN instead, so the password lives in
+  # a Secret rather than in a ConfigMap.
+  dsn: ""
+  # Snapshots buffered for writing before new ones are dropped and counted.
+  queue_size: 1024
+
+recommender:
+  # Documented one by one, with the reasoning behind each default, in
+  # docs/RECOMMENDATIONS.md. They are starting points for interactive serving:
+  # a batch workload and a chat endpoint disagree about what a bad TTFT is.
+  thresholds:
+    # How long a condition must hold before a rule fires. Single-scrape
+    # thresholds are the main source of false positives in inference
+    # monitoring: queues spike for one scheduler step routinely.
+    sustain_for: 45s
+    # Beyond this age a workload is reported as unobserved rather than healthy.
+    stale_after: 2m
+
+    queue_waiting_requests: 8
+    # The gap between the two GPU thresholds is deliberate: workloads in
+    # between are neither saturated nor obviously misconfigured.
+    gpu_util_high_pct: 85
+    gpu_util_low_pct: 35
+    gpu_memory_high_pct: 90
+
+    # High KV occupancy is not a fault on its own — it means the cache is being
+    # used. The preemption rate below is the signal that it has run out.
+    kv_cache_high_pct: 90
+    preemptions_per_sec: 0.01
+
+    ttft_p95_ms: 1000
+    e2e_p95_ms: 10000
+    # Above this share of TTFT, the wait to be admitted dominates and the fix
+    # is capacity; below it the fix is prompt shape or prefill configuration.
+    queue_share_of_ttft_pct: 50
+    tail_ratio_p99_p95: 3
+
+    tokens_per_second_low: 200
+    prefix_cache_hit_low_pct: 10
+
+    error_rate_pct: 2
+    abort_rate_pct: 5

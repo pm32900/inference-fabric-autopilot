@@ -1,0 +1,29 @@
+# Trimmed exposition in the shape emitted by pre-V1 vLLM builds: no engine
+# label, and KV-cache utilisation under its old name gpu_cache_usage_perc.
+# Used to check that the adapter keeps working across the rename.
+# HELP vllm:num_requests_running Number of requests currently running on GPU.
+# TYPE vllm:num_requests_running gauge
+vllm:num_requests_running{model_name="mistralai/Mistral-7B-Instruct-v0.2"} 6.0
+# HELP vllm:num_requests_waiting Number of requests waiting to be processed.
+# TYPE vllm:num_requests_waiting gauge
+vllm:num_requests_waiting{model_name="mistralai/Mistral-7B-Instruct-v0.2"} 14.0
+# HELP vllm:gpu_cache_usage_perc GPU KV-cache usage. 1 means 100 percent usage.
+# TYPE vllm:gpu_cache_usage_perc gauge
+vllm:gpu_cache_usage_perc{model_name="mistralai/Mistral-7B-Instruct-v0.2"} 0.93
+# HELP vllm:prompt_tokens_total Number of prefill tokens processed.
+# TYPE vllm:prompt_tokens_total counter
+vllm:prompt_tokens_total{model_name="mistralai/Mistral-7B-Instruct-v0.2"} 903112.0
+# HELP vllm:generation_tokens_total Number of generation tokens processed.
+# TYPE vllm:generation_tokens_total counter
+vllm:generation_tokens_total{model_name="mistralai/Mistral-7B-Instruct-v0.2"} 411990.0
+# HELP vllm:request_success_total Count of successfully processed requests.
+# TYPE vllm:request_success_total counter
+vllm:request_success_total{model_name="mistralai/Mistral-7B-Instruct-v0.2",finished_reason="stop"} 2201.0
+# HELP vllm:time_to_first_token_seconds Histogram of time to first token in seconds.
+# TYPE vllm:time_to_first_token_seconds histogram
+vllm:time_to_first_token_seconds_bucket{model_name="mistralai/Mistral-7B-Instruct-v0.2",le="0.1"} 0.0
+vllm:time_to_first_token_seconds_bucket{model_name="mistralai/Mistral-7B-Instruct-v0.2",le="0.5"} 20.0
+vllm:time_to_first_token_seconds_bucket{model_name="mistralai/Mistral-7B-Instruct-v0.2",le="1.0"} 100.0
+vllm:time_to_first_token_seconds_bucket{model_name="mistralai/Mistral-7B-Instruct-v0.2",le="+Inf"} 200.0
+vllm:time_to_first_token_seconds_count{model_name="mistralai/Mistral-7B-Instruct-v0.2"} 200.0
+vllm:time_to_first_token_seconds_sum{model_name="mistralai/Mistral-7B-Instruct-v0.2"} 264.0
