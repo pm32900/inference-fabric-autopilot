@@ -276,3 +276,8 @@ See [CONTRIBUTING.md](./CONTRIBUTING.md). Open an issue before starting non-triv
 ## License
 
 Apache 2.0 — see [LICENSE](./LICENSE).
+
+## Quick Install
+```bash
+helm install autopilot deploy/helm/autopilot/
+```
