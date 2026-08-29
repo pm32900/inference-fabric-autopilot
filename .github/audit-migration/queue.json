@@ -1,0 +1,57 @@
+{
+  "$comment": [
+    "Ordered queue of change-sets to migrate from the audit/staging branch onto main,",
+    "one per scheduled run. Order is a dependency order, not a preference: each entry",
+    "assumes every earlier entry is already on main. Do not reorder, and do not split",
+    "an entry to produce more commits — every entry here is the smallest change that",
+    "still builds and tests on its own.",
+    "",
+    "Progress is derived from merged pull requests, not from state stored here, so",
+    "this file never needs to be updated as the migration proceeds."
+  ],
+  "staging_ref": "refs/heads/audit/staging",
+  "change_sets": [
+    {
+      "id": "02",
+      "sha": "c9c1e919aa820427eba9c973c43a18926d5aa946",
+      "slug": "promtext-parser",
+      "title": "feat(promtext): a real Prometheus text-format parser",
+      "problem": "Every runtime adapter matched metric names with strings.Contains and ignored label sets, so a server exposing two models produced values silently mixed across both. Percentiles were read from summary quantiles that vLLM does not emit.",
+      "validate": ["fmt", "vet", "build", "test", "race", "bench"]
+    },
+    {
+      "id": "03",
+      "sha": "cb893fbd6688442edbebfe9b070786f63e4db9ed",
+      "slug": "telemetry-model-and-rule-engine",
+      "title": "feat: rebuild the telemetry model, adapters, rule engine and wiring",
+      "problem": "A float64 telemetry model could not distinguish an unmeasured signal from a measured zero, so rules fired on absent data. The vLLM adapter read metrics vLLM does not expose. Rules evaluated single instantaneous samples with no sustain window.",
+      "atomic": true,
+      "atomic_reason": "The telemetry type change, the adapter contract, the rule engine and every caller are one compile unit. Splitting it produces commits that do not build, which breaks git bisect for no gain.",
+      "validate": ["fmt", "vet", "build", "test", "race", "demo"]
+    },
+    {
+      "id": "04",
+      "sha": "18c673056d4e03a39e0690689167c7819d1b21a0",
+      "slug": "helm-chart-and-image",
+      "title": "chore(deploy): rewrite the chart; real security contexts, one image",
+      "problem": "Two overlapping deployment paths (raw manifests and a chart) had drifted apart, the chart had no values schema, no security contexts and no NetworkPolicy, and two Dockerfiles built images for a node-agent that no longer exists.",
+      "validate": ["fmt", "vet", "build", "test", "helm", "shellcheck"]
+    },
+    {
+      "id": "05",
+      "sha": "704f2482a5a5e54b6ce82ddc45a5115ca620a7f5",
+      "slug": "ci-and-release",
+      "title": "ci: cover what actually breaks, and add release automation",
+      "problem": "CI ran go test and nothing else: the chart, the container image, the shell scripts and the demo could all break without any signal. No release automation, no dependency updates.",
+      "validate": ["fmt", "vet", "build", "test", "race", "helm", "shellcheck", "actionlint"]
+    },
+    {
+      "id": "06",
+      "sha": "05b125b03e7040c2b882d261eb2d6d71346566ea",
+      "slug": "documentation",
+      "title": "docs: rewrite around what the project actually does",
+      "problem": "The README described capabilities the code did not have, documentation claimed validation that had never been performed, and five directories of docs had no navigable structure or recorded decisions.",
+      "validate": ["fmt", "vet", "build", "test", "links"]
+    }
+  ]
+}
