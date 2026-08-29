@@ -1,35 +1,22 @@
-## Summary
+## What and why
 
-What does this PR do? Why is the change needed?
+<!-- The diff says what changed. Say why. -->
 
-## Type of change
-
-- [ ] Bug fix
-- [ ] New feature
-- [ ] Documentation update
-- [ ] Refactor (no behavior change)
-- [ ] Test coverage improvement
-
-## Changes
-
-- 
-- 
-
-## Testing
-
-How was this tested? Include commands that validate the change.
+## How it was verified
 
 ```bash
-go test ./...
-go vet ./...
+make verify
 ```
+
+<!-- Plus anything specific: `make demo` output, a new test, `ifa check` against
+     a real server. -->
 
 ## Checklist
 
-- [ ] `go test ./...` passes
-- [ ] `go vet ./...` passes
-- [ ] New logic has test coverage
-- [ ] No new external dependencies added without discussion
-- [ ] Change stays within the read-only constraint (no Kubernetes mutations)
-- [ ] No sensitive data (secrets, tokens, local paths) introduced
-- [ ] Documentation updated if behavior changed
+- [ ] `make verify` passes (gofmt, vet, race tests, chart lint)
+- [ ] New behaviour has a test that fails without the change
+- [ ] No new dependency, or the PR explains why one is needed
+- [ ] Stays read-only: no Kubernetes writes, no remediation
+- [ ] No invented data: a signal the runtime does not expose stays unmeasured
+- [ ] Docs updated in this PR if behaviour changed — a new rule needs an entry
+      in `docs/RECOMMENDATIONS.md`

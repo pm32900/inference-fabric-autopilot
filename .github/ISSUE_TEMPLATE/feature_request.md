@@ -1,33 +1,24 @@
 ---
 name: Feature request
-about: Propose a new capability or improvement
-title: '[feat] '
+about: Propose a new rule, runtime, or capability
 labels: enhancement
-assignees: ''
 ---
 
-## Problem or motivation
+## The problem
 
-What problem does this solve, or what gap does it address?
-Be specific about the infrastructure or operational scenario.
+<!-- What went wrong in your cluster that IFA did not tell you about, or told
+     you about unhelpfully? Concrete beats abstract. -->
 
-## Proposed solution
+## What you would want it to do
 
-Describe the change you would like to see.
+## For a new rule
 
-## Alternatives considered
+- What signals would it combine? <!-- A single-signal threshold usually belongs
+  in Prometheus alerting rather than here. -->
+- What would the suggested action be?
+- What distinguishes it from an existing rule in docs/RECOMMENDATIONS.md?
 
-Other approaches you thought of, and why this one is better.
+## For a new runtime
 
-## Constraints
-
-Does this proposal stay within the project's core constraints?
-
-- [ ] Read-only with respect to Kubernetes (no create/update/delete)
-- [ ] No autonomous remediation — recommendations only
-- [ ] No collection of prompt bodies, response payloads, or user identifiers
-- [ ] No new required external runtime dependencies
-
-## Additional context
-
-Links, references, related issues, or example metric names/APIs that would be involved.
+- Does it expose Prometheus metrics? Link to their definitions if you can.
+- Would you be able to run `ifa check` against it once implemented?
