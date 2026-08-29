@@ -1,3 +1,26 @@
+{{- if .Values.rbac.create }}
+{{- $clusterScoped := or (eq .Values.rbac.scope "cluster") (not .Values.config.kubernetes.namespace) }}
+{{- $rules := `
+# Deployments supply replica counts, which the scaling rules need and which no
+# inference runtime knows about.
+- apiGroups: ["apps"]
+  resources: ["deployments"]
+  verbs: ["get", "list", "watch"]
+# Pods supply container restart counts, which separate "slow to start" from
+# "crash-looping" when replicas are unavailable.
+- apiGroups: [""]
+  resources: ["pods"]
+  verbs: ["get", "list", "watch"]
+# HorizontalPodAutoscalers supply the replica ceiling. Without it, IFA cannot
+# tell "queueing and the autoscaler will fix it" from "queueing at the ceiling
+# and nothing will".
+- apiGroups: ["autoscaling"]
+  resources: ["horizontalpodautoscalers"]
+  verbs: ["get", "list", "watch"]
+` }}
+{{- if $clusterScoped }}
+# Cluster scope is required only when watching every namespace. Setting
+# config.kubernetes.namespace and rbac.scope=namespace narrows this to a Role.
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
 metadata:
@@ -5,12 +28,7 @@ metadata:
   labels:
     {{- include "autopilot.labels" . | nindent 4 }}
 rules:
-  - apiGroups: [""]
-    resources: ["pods", "nodes", "namespaces"]
-    verbs: ["get", "list", "watch"]
-  - apiGroups: ["apps"]
-    resources: ["deployments", "daemonsets", "replicasets"]
-    verbs: ["get", "list", "watch"]
+  {{- $rules | nindent 2 }}
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding
@@ -24,5 +42,33 @@ roleRef:
   name: {{ include "autopilot.fullname" . }}
 subjects:
   - kind: ServiceAccount
-    name: {{ .Values.serviceAccount.name | default (include "autopilot.fullname" .) }}
+    name: {{ include "autopilot.serviceAccountName" . }}
     namespace: {{ .Release.Namespace }}
+{{- else }}
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ include "autopilot.fullname" . }}
+  namespace: {{ .Values.config.kubernetes.namespace }}
+  labels:
+    {{- include "autopilot.labels" . | nindent 4 }}
+rules:
+  {{- $rules | nindent 2 }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ include "autopilot.fullname" . }}
+  namespace: {{ .Values.config.kubernetes.namespace }}
+  labels:
+    {{- include "autopilot.labels" . | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: {{ include "autopilot.fullname" . }}
+subjects:
+  - kind: ServiceAccount
+    name: {{ include "autopilot.serviceAccountName" . }}
+    namespace: {{ .Release.Namespace }}
+{{- end }}
+{{- end }}
