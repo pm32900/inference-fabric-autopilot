@@ -1,0 +1,121 @@
+# HELP vllm:cache_config_info Information of the LLMEngine CacheConfig
+# TYPE vllm:cache_config_info gauge
+vllm:cache_config_info{block_size="16",gpu_memory_utilization="0.9",num_gpu_blocks="8704"} 1.0
+# HELP vllm:num_requests_running Number of requests in model execution batches.
+# TYPE vllm:num_requests_running gauge
+vllm:num_requests_running{model_name="meta-llama/Llama-3.1-8B-Instruct",engine="0"} 11.0
+# HELP vllm:num_requests_waiting Number of requests waiting to be processed.
+# TYPE vllm:num_requests_waiting gauge
+vllm:num_requests_waiting{model_name="meta-llama/Llama-3.1-8B-Instruct",engine="0"} 3.0
+# HELP vllm:num_requests_waiting_by_reason Number of waiting requests by reason.
+# TYPE vllm:num_requests_waiting_by_reason gauge
+vllm:num_requests_waiting_by_reason{model_name="meta-llama/Llama-3.1-8B-Instruct",engine="0",reason="capacity"} 3.0
+vllm:num_requests_waiting_by_reason{model_name="meta-llama/Llama-3.1-8B-Instruct",engine="0",reason="deferred"} 0.0
+# HELP vllm:kv_cache_usage_perc KV-cache usage. 1 means 100 percent usage.
+# TYPE vllm:kv_cache_usage_perc gauge
+vllm:kv_cache_usage_perc{model_name="meta-llama/Llama-3.1-8B-Instruct",engine="0"} 0.6412
+# HELP vllm:num_preemptions_total Cumulative number of preemptions from the engine.
+# TYPE vllm:num_preemptions_total counter
+vllm:num_preemptions_total{model_name="meta-llama/Llama-3.1-8B-Instruct",engine="0"} 0.0
+# HELP vllm:prompt_tokens_total Number of prefill tokens processed.
+# TYPE vllm:prompt_tokens_total counter
+vllm:prompt_tokens_total{model_name="meta-llama/Llama-3.1-8B-Instruct",engine="0"} 4821904.0
+# HELP vllm:generation_tokens_total Number of generation tokens processed.
+# TYPE vllm:generation_tokens_total counter
+vllm:generation_tokens_total{model_name="meta-llama/Llama-3.1-8B-Instruct",engine="0"} 1930447.0
+# HELP vllm:prefix_cache_queries_total Prefix cache queries, in terms of number of queried tokens.
+# TYPE vllm:prefix_cache_queries_total counter
+vllm:prefix_cache_queries_total{model_name="meta-llama/Llama-3.1-8B-Instruct",engine="0"} 4821904.0
+# HELP vllm:prefix_cache_hits_total Prefix cache hits, in terms of number of cached tokens.
+# TYPE vllm:prefix_cache_hits_total counter
+vllm:prefix_cache_hits_total{model_name="meta-llama/Llama-3.1-8B-Instruct",engine="0"} 3182456.0
+# HELP vllm:request_success_total Count of successfully processed requests.
+# TYPE vllm:request_success_total counter
+vllm:request_success_total{model_name="meta-llama/Llama-3.1-8B-Instruct",engine="0",finished_reason="stop"} 9312.0
+vllm:request_success_total{model_name="meta-llama/Llama-3.1-8B-Instruct",engine="0",finished_reason="length"} 651.0
+vllm:request_success_total{model_name="meta-llama/Llama-3.1-8B-Instruct",engine="0",finished_reason="abort"} 37.0
+# HELP vllm:time_to_first_token_seconds Histogram of time to first token in seconds.
+# TYPE vllm:time_to_first_token_seconds histogram
+vllm:time_to_first_token_seconds_bucket{model_name="meta-llama/Llama-3.1-8B-Instruct",engine="0",le="0.001"} 0.0
+vllm:time_to_first_token_seconds_bucket{model_name="meta-llama/Llama-3.1-8B-Instruct",engine="0",le="0.005"} 0.0
+vllm:time_to_first_token_seconds_bucket{model_name="meta-llama/Llama-3.1-8B-Instruct",engine="0",le="0.01"} 0.0
+vllm:time_to_first_token_seconds_bucket{model_name="meta-llama/Llama-3.1-8B-Instruct",engine="0",le="0.02"} 2.0
+vllm:time_to_first_token_seconds_bucket{model_name="meta-llama/Llama-3.1-8B-Instruct",engine="0",le="0.04"} 20.0
+vllm:time_to_first_token_seconds_bucket{model_name="meta-llama/Llama-3.1-8B-Instruct",engine="0",le="0.06"} 80.0
+vllm:time_to_first_token_seconds_bucket{model_name="meta-llama/Llama-3.1-8B-Instruct",engine="0",le="0.08"} 180.0
+vllm:time_to_first_token_seconds_bucket{model_name="meta-llama/Llama-3.1-8B-Instruct",engine="0",le="0.1"} 300.0
+vllm:time_to_first_token_seconds_bucket{model_name="meta-llama/Llama-3.1-8B-Instruct",engine="0",le="0.25"} 820.0
+vllm:time_to_first_token_seconds_bucket{model_name="meta-llama/Llama-3.1-8B-Instruct",engine="0",le="0.5"} 960.0
+vllm:time_to_first_token_seconds_bucket{model_name="meta-llama/Llama-3.1-8B-Instruct",engine="0",le="0.75"} 990.0
+vllm:time_to_first_token_seconds_bucket{model_name="meta-llama/Llama-3.1-8B-Instruct",engine="0",le="1"} 1000.0
+vllm:time_to_first_token_seconds_bucket{model_name="meta-llama/Llama-3.1-8B-Instruct",engine="0",le="2.5"} 1000.0
+vllm:time_to_first_token_seconds_bucket{model_name="meta-llama/Llama-3.1-8B-Instruct",engine="0",le="5"} 1000.0
+vllm:time_to_first_token_seconds_bucket{model_name="meta-llama/Llama-3.1-8B-Instruct",engine="0",le="7.5"} 1000.0
+vllm:time_to_first_token_seconds_bucket{model_name="meta-llama/Llama-3.1-8B-Instruct",engine="0",le="10"} 1000.0
+vllm:time_to_first_token_seconds_bucket{model_name="meta-llama/Llama-3.1-8B-Instruct",engine="0",le="20"} 1000.0
+vllm:time_to_first_token_seconds_bucket{model_name="meta-llama/Llama-3.1-8B-Instruct",engine="0",le="40"} 1000.0
+vllm:time_to_first_token_seconds_bucket{model_name="meta-llama/Llama-3.1-8B-Instruct",engine="0",le="80"} 1000.0
+vllm:time_to_first_token_seconds_bucket{model_name="meta-llama/Llama-3.1-8B-Instruct",engine="0",le="160"} 1000.0
+vllm:time_to_first_token_seconds_bucket{model_name="meta-llama/Llama-3.1-8B-Instruct",engine="0",le="640"} 1000.0
+vllm:time_to_first_token_seconds_bucket{model_name="meta-llama/Llama-3.1-8B-Instruct",engine="0",le="2560"} 1000.0
+vllm:time_to_first_token_seconds_bucket{model_name="meta-llama/Llama-3.1-8B-Instruct",engine="0",le="+Inf"} 1000.0
+vllm:time_to_first_token_seconds_count{model_name="meta-llama/Llama-3.1-8B-Instruct",engine="0"} 1000.0
+vllm:time_to_first_token_seconds_sum{model_name="meta-llama/Llama-3.1-8B-Instruct",engine="0"} 196.4
+# HELP vllm:e2e_request_latency_seconds Histogram of e2e request latency in seconds.
+# TYPE vllm:e2e_request_latency_seconds histogram
+vllm:e2e_request_latency_seconds_bucket{model_name="meta-llama/Llama-3.1-8B-Instruct",engine="0",le="0.3"} 50.0
+vllm:e2e_request_latency_seconds_bucket{model_name="meta-llama/Llama-3.1-8B-Instruct",engine="0",le="0.5"} 200.0
+vllm:e2e_request_latency_seconds_bucket{model_name="meta-llama/Llama-3.1-8B-Instruct",engine="0",le="0.8"} 500.0
+vllm:e2e_request_latency_seconds_bucket{model_name="meta-llama/Llama-3.1-8B-Instruct",engine="0",le="1"} 700.0
+vllm:e2e_request_latency_seconds_bucket{model_name="meta-llama/Llama-3.1-8B-Instruct",engine="0",le="1.5"} 900.0
+vllm:e2e_request_latency_seconds_bucket{model_name="meta-llama/Llama-3.1-8B-Instruct",engine="0",le="2"} 970.0
+vllm:e2e_request_latency_seconds_bucket{model_name="meta-llama/Llama-3.1-8B-Instruct",engine="0",le="2.5"} 990.0
+vllm:e2e_request_latency_seconds_bucket{model_name="meta-llama/Llama-3.1-8B-Instruct",engine="0",le="5"} 1000.0
+vllm:e2e_request_latency_seconds_bucket{model_name="meta-llama/Llama-3.1-8B-Instruct",engine="0",le="10"} 1000.0
+vllm:e2e_request_latency_seconds_bucket{model_name="meta-llama/Llama-3.1-8B-Instruct",engine="0",le="15"} 1000.0
+vllm:e2e_request_latency_seconds_bucket{model_name="meta-llama/Llama-3.1-8B-Instruct",engine="0",le="20"} 1000.0
+vllm:e2e_request_latency_seconds_bucket{model_name="meta-llama/Llama-3.1-8B-Instruct",engine="0",le="30"} 1000.0
+vllm:e2e_request_latency_seconds_bucket{model_name="meta-llama/Llama-3.1-8B-Instruct",engine="0",le="40"} 1000.0
+vllm:e2e_request_latency_seconds_bucket{model_name="meta-llama/Llama-3.1-8B-Instruct",engine="0",le="50"} 1000.0
+vllm:e2e_request_latency_seconds_bucket{model_name="meta-llama/Llama-3.1-8B-Instruct",engine="0",le="60"} 1000.0
+vllm:e2e_request_latency_seconds_bucket{model_name="meta-llama/Llama-3.1-8B-Instruct",engine="0",le="120"} 1000.0
+vllm:e2e_request_latency_seconds_bucket{model_name="meta-llama/Llama-3.1-8B-Instruct",engine="0",le="240"} 1000.0
+vllm:e2e_request_latency_seconds_bucket{model_name="meta-llama/Llama-3.1-8B-Instruct",engine="0",le="480"} 1000.0
+vllm:e2e_request_latency_seconds_bucket{model_name="meta-llama/Llama-3.1-8B-Instruct",engine="0",le="960"} 1000.0
+vllm:e2e_request_latency_seconds_bucket{model_name="meta-llama/Llama-3.1-8B-Instruct",engine="0",le="1920"} 1000.0
+vllm:e2e_request_latency_seconds_bucket{model_name="meta-llama/Llama-3.1-8B-Instruct",engine="0",le="7680"} 1000.0
+vllm:e2e_request_latency_seconds_bucket{model_name="meta-llama/Llama-3.1-8B-Instruct",engine="0",le="+Inf"} 1000.0
+vllm:e2e_request_latency_seconds_count{model_name="meta-llama/Llama-3.1-8B-Instruct",engine="0"} 1000.0
+vllm:e2e_request_latency_seconds_sum{model_name="meta-llama/Llama-3.1-8B-Instruct",engine="0"} 912.7
+# HELP vllm:request_queue_time_seconds Histogram of time spent in WAITING phase for request.
+# TYPE vllm:request_queue_time_seconds histogram
+vllm:request_queue_time_seconds_bucket{model_name="meta-llama/Llama-3.1-8B-Instruct",engine="0",le="0.3"} 940.0
+vllm:request_queue_time_seconds_bucket{model_name="meta-llama/Llama-3.1-8B-Instruct",engine="0",le="0.5"} 985.0
+vllm:request_queue_time_seconds_bucket{model_name="meta-llama/Llama-3.1-8B-Instruct",engine="0",le="0.8"} 1000.0
+vllm:request_queue_time_seconds_bucket{model_name="meta-llama/Llama-3.1-8B-Instruct",engine="0",le="1"} 1000.0
+vllm:request_queue_time_seconds_bucket{model_name="meta-llama/Llama-3.1-8B-Instruct",engine="0",le="1.5"} 1000.0
+vllm:request_queue_time_seconds_bucket{model_name="meta-llama/Llama-3.1-8B-Instruct",engine="0",le="2"} 1000.0
+vllm:request_queue_time_seconds_bucket{model_name="meta-llama/Llama-3.1-8B-Instruct",engine="0",le="2.5"} 1000.0
+vllm:request_queue_time_seconds_bucket{model_name="meta-llama/Llama-3.1-8B-Instruct",engine="0",le="5"} 1000.0
+vllm:request_queue_time_seconds_bucket{model_name="meta-llama/Llama-3.1-8B-Instruct",engine="0",le="10"} 1000.0
+vllm:request_queue_time_seconds_bucket{model_name="meta-llama/Llama-3.1-8B-Instruct",engine="0",le="15"} 1000.0
+vllm:request_queue_time_seconds_bucket{model_name="meta-llama/Llama-3.1-8B-Instruct",engine="0",le="20"} 1000.0
+vllm:request_queue_time_seconds_bucket{model_name="meta-llama/Llama-3.1-8B-Instruct",engine="0",le="30"} 1000.0
+vllm:request_queue_time_seconds_bucket{model_name="meta-llama/Llama-3.1-8B-Instruct",engine="0",le="40"} 1000.0
+vllm:request_queue_time_seconds_bucket{model_name="meta-llama/Llama-3.1-8B-Instruct",engine="0",le="50"} 1000.0
+vllm:request_queue_time_seconds_bucket{model_name="meta-llama/Llama-3.1-8B-Instruct",engine="0",le="60"} 1000.0
+vllm:request_queue_time_seconds_bucket{model_name="meta-llama/Llama-3.1-8B-Instruct",engine="0",le="120"} 1000.0
+vllm:request_queue_time_seconds_bucket{model_name="meta-llama/Llama-3.1-8B-Instruct",engine="0",le="240"} 1000.0
+vllm:request_queue_time_seconds_bucket{model_name="meta-llama/Llama-3.1-8B-Instruct",engine="0",le="480"} 1000.0
+vllm:request_queue_time_seconds_bucket{model_name="meta-llama/Llama-3.1-8B-Instruct",engine="0",le="960"} 1000.0
+vllm:request_queue_time_seconds_bucket{model_name="meta-llama/Llama-3.1-8B-Instruct",engine="0",le="1920"} 1000.0
+vllm:request_queue_time_seconds_bucket{model_name="meta-llama/Llama-3.1-8B-Instruct",engine="0",le="7680"} 1000.0
+vllm:request_queue_time_seconds_bucket{model_name="meta-llama/Llama-3.1-8B-Instruct",engine="0",le="+Inf"} 1000.0
+vllm:request_queue_time_seconds_count{model_name="meta-llama/Llama-3.1-8B-Instruct",engine="0"} 1000.0
+vllm:request_queue_time_seconds_sum{model_name="meta-llama/Llama-3.1-8B-Instruct",engine="0"} 88.1
+# HELP python_gc_objects_collected_total Objects collected during gc
+# TYPE python_gc_objects_collected_total counter
+python_gc_objects_collected_total{generation="0"} 108324.0
+# HELP process_resident_memory_bytes Resident memory size in bytes.
+# TYPE process_resident_memory_bytes gauge
+process_resident_memory_bytes 2.8991488e+10
