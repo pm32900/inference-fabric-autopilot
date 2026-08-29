@@ -35,14 +35,13 @@ concurrency:
   cancel-in-progress: false
 
 env:
-  # Attribution for the landed commits. The change-sets on audit/staging were
-  # committed by an assistant working from Prajwal's direction; these land them
-  # under the author who directed and reviews them, with the assistance recorded
-  # in a trailer. Change COMMIT_AUTHOR_* if you want different attribution, and
-  # clear COMMIT_COAUTHOR if you do not want the trailer.
-  COMMIT_AUTHOR_NAME: "Prajwal Moras"
-  COMMIT_AUTHOR_EMAIL: "prajwalmoras19@gmail.com"
-  COMMIT_COAUTHOR: "Claude <noreply@anthropic.com>"
+  # Attribution. Commits replayed from audit/staging keep the author, author
+  # date and message they were written with — nothing here rewrites them. These
+  # two names only apply to commits a run creates itself, which is the fix-ups
+  # made when a validation fails; that work is the assistant's, so it is
+  # recorded as the assistant's.
+  FIXUP_AUTHOR_NAME: "Claude"
+  FIXUP_AUTHOR_EMAIL: "noreply@anthropic.com"
 
 jobs:
   migrate:
@@ -135,9 +134,10 @@ jobs:
             3. If a validation fails, fix it on this branch. Fix the actual
                defect — do not delete the failing test, loosen the assertion,
                or skip the check. Commit the fix as a separate commit with a
-               message explaining what broke and why, using the same author
-               identity already configured in git config. Re-run the
-               validation. If after three attempts it still fails, push the
+               message explaining what broke and why, using the author identity
+               already configured in git config — do not change it, and do not
+               add a Co-Authored-By trailer, because that identity is already
+               yours. Re-run the validation. If after three attempts it still fails, push the
                branch, open the pull request as a DRAFT explaining exactly what
                fails, and do not enable auto-merge.
 
