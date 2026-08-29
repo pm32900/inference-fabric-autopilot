@@ -1,61 +1,210 @@
-controlPlane:
-  image:
-    repository: ifa-control-plane
-    tag: dev
-    pullPolicy: IfNotPresent
-  replicas: 1
+# Default values for the Inference Fabric Autopilot chart.
+#
+# The chart installs one Deployment. There is no DaemonSet and no node agent:
+# everything IFA reads comes from HTTP endpoints that already exist in the
+# cluster, so there is nothing for a per-node component to do.
+
+image:
+  # registry is prefixed to repository when set, for internal mirrors.
+  registry: ""
+  repository: ghcr.io/pm32900/inference-fabric-autopilot
+  # Pin a released tag. "latest" is deliberately not the default: a diagnostics
+  # tool that silently changes its rule set under you is worse than one that
+  # needs an upgrade.
+  tag: ""
+  pullPolicy: IfNotPresent
+  pullSecrets: []
+
+replicaCount: 1
+
+# nameOverride/fullnameOverride follow the usual chart conventions.
+nameOverride: ""
+fullnameOverride: ""
+
+service:
+  type: ClusterIP
   port: 8080
-  resources:
-    requests:
-      cpu: 100m
-      memory: 128Mi
-    limits:
-      cpu: 500m
-      memory: 256Mi
+  annotations: {}
 
-nodeAgent:
-  image:
-    repository: ifa-node-agent
-    tag: dev
-    pullPolicy: IfNotPresent
-  resources:
-    requests:
-      cpu: 50m
-      memory: 64Mi
-    limits:
-      cpu: 200m
-      memory: 128Mi
+# Requests are what the scheduler reserves; the limits are generous headroom for
+# a workload whose cost is dominated by parsing exposition payloads. There is no
+# CPU limit by default: throttling a control plane mid-scrape produces timeouts
+# that look like unhealthy targets.
+resources:
+  requests:
+    cpu: 50m
+    memory: 128Mi
+  limits:
+    memory: 512Mi
 
-config:
-  server:
-    port: 8080
-  collector:
-    mode: simulated
-    interval_seconds: 5
-  kubernetes:
-    enabled: false
-    namespace: inference
-    sync_interval_seconds: 30
-  database:
-    enabled: false
-    dsn: "postgres://postgres:autopilot@localhost:5432/autopilot?sslmode=disable"
-  recommender:
-    thresholds:
-      low_gpu_util_pct: 30.0
-      high_gpu_mem_pct: 85.0
-      high_p95_latency_ms: 500.0
-      high_queue_depth: 10
-      high_error_rate_pct: 2.0
-      min_replicas_for_rps: 10.0
-  logging:
-    level: info
-    format: text
+# Pod-level security context. IFA needs no filesystem, no privileges and no
+# capabilities; the container image ships no shell.
+podSecurityContext:
+  runAsNonRoot: true
+  runAsUser: 65532
+  runAsGroup: 65532
+  fsGroup: 65532
+  seccompProfile:
+    type: RuntimeDefault
+
+securityContext:
+  allowPrivilegeEscalation: false
+  privileged: false
+  readOnlyRootFilesystem: true
+  runAsNonRoot: true
+  capabilities:
+    drop:
+      - ALL
+
+livenessProbe:
+  httpGet:
+    path: /api/v1/healthz
+    port: http
+  initialDelaySeconds: 5
+  periodSeconds: 15
+  timeoutSeconds: 3
+  failureThreshold: 3
+
+# Readiness uses a different endpoint from liveness on purpose: /readyz reports
+# unready until the first collection cycle completes, so a rollout does not send
+# traffic to an instance with an empty store.
+readinessProbe:
+  httpGet:
+    path: /api/v1/readyz
+    port: http
+  initialDelaySeconds: 2
+  periodSeconds: 5
+  timeoutSeconds: 3
+  failureThreshold: 6
 
 serviceAccount:
   create: true
   name: ""
+  annotations: {}
+
+rbac:
+  create: true
+  # scope: "namespace" grants a Role in the watched namespace only.
+  # "cluster" grants a ClusterRole and is required when config.kubernetes.namespace
+  # is empty (watch every namespace). Prefer namespace.
+  # Every rule is get/list/watch — see docs/RBAC_PERMISSIONS.md.
+  scope: namespace
+
+podDisruptionBudget:
+  # Only meaningful with replicaCount > 1. A single-replica diagnostics service
+  # does not need protecting from a node drain; blocking one is worse.
+  enabled: false
+  minAvailable: 1
+
+# Emit a Prometheus Operator ServiceMonitor for IFA's own metrics.
+serviceMonitor:
+  enabled: false
+  interval: 30s
+  labels: {}
 
 networkPolicy:
+  # Off by default because a policy that is subtly wrong silently stops IFA
+  # scraping the workloads it exists to watch. Read the comments before
+  # enabling. See docs/SECURITY_MODEL.md.
   enabled: false
-  prometheusNamespace: monitoring
-  timescaledbNamespace: timescaledb
+  # Namespaces holding the inference workloads IFA scrapes. IFA connects to the
+  # runtime's own metrics port (8000 for vLLM, 8002 for Triton), NOT to
+  # Prometheus — leaving these out is the usual reason enabling the policy makes
+  # every target unreachable.
+  scrapeNamespaces:
+    - inference
+  scrapePorts:
+    - 8000
+    - 8002
+  # DCGM Exporter, when configured as a GPU metrics source.
+  dcgmNamespaces:
+    - gpu-operator
+  dcgmPort: 9400
+  # Namespace running the optional TimescaleDB backend.
+  databaseNamespace: ""
+  databasePort: 5432
+  # Namespaces allowed to reach IFA's API and metrics.
+  ingressNamespaces:
+    - monitoring
+
+database:
+  # The DSN carries a password, so it comes from a Secret rather than from the
+  # ConfigMap the rest of the configuration lives in. Set config.database.enabled
+  # as well.
+  existingSecret: ""
+  secretKey: dsn
+
+# Extra environment variables for the container.
+extraEnv: []
+
+nodeSelector: {}
+tolerations: []
+affinity: {}
+podAnnotations: {}
+podLabels: {}
+
+# config is rendered verbatim into a ConfigMap and mounted at
+# /etc/ifa/config.yaml. Every key is documented in docs/CONFIGURATION.md and in
+# the config.yaml at the repository root.
+config:
+  cluster_name: default
+
+  server:
+    address: ":8080"
+    read_header_timeout: 5s
+    read_timeout: 15s
+    write_timeout: 30s
+    idle_timeout: 60s
+    shutdown_timeout: 10s
+
+  logging:
+    level: info
+    format: json
+
+  collector:
+    interval: 15s
+    timeout: 10s
+    concurrency: 8
+    max_body_bytes: 8388608
+    # IFA scrapes nothing until targets are listed here.
+    targets: []
+    # - name: chat-llama3-8b
+    #   namespace: inference
+    #   runtime: vllm
+    #   model_name: meta-llama/Llama-3.1-8B-Instruct
+    #   metrics_url: http://chat-llama3-8b.inference.svc:8000/metrics
+    #   dcgm_url: http://dcgm-exporter.gpu-operator.svc:9400/metrics
+
+  telemetry:
+    retention_samples: 120
+    retention_period: 15m
+
+  kubernetes:
+    enabled: true
+    namespace: inference
+    label_selector: ""
+    resync_period: 10m
+
+  database:
+    enabled: false
+    dsn: ""
+    queue_size: 1024
+
+  recommender:
+    thresholds:
+      sustain_for: 45s
+      stale_after: 2m
+      queue_waiting_requests: 8
+      gpu_util_high_pct: 85
+      gpu_util_low_pct: 35
+      gpu_memory_high_pct: 90
+      kv_cache_high_pct: 90
+      preemptions_per_sec: 0.01
+      ttft_p95_ms: 1000
+      e2e_p95_ms: 10000
+      queue_share_of_ttft_pct: 50
+      tail_ratio_p99_p95: 3
+      tokens_per_second_low: 200
+      prefix_cache_hit_low_pct: 10
+      error_rate_pct: 2
+      abort_rate_pct: 5
