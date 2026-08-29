@@ -83,11 +83,19 @@ jobs:
           version: v3.16.3
 
       - name: Validate, fix if needed, and open the pull request
+        id: claude
         if: steps.plan.outputs.status == 'proceed'
         uses: anthropics/claude-code-action@v1
         with:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           github_token: ${{ secrets.GH_PAT }}
+          # TEMPORARY — diagnosing a run that failed with is_error=true,
+          # num_turns=1, total_cost_usd=0 and empty modelUsage. Revert both of
+          # these once the cause is known: show_full_output prints Claude's
+          # messages and tool results, which is more than this workflow should
+          # log routinely.
+          display_report: true
+          show_full_output: true
           claude_args: --allowedTools "Bash,Read,Edit,Write,Glob,Grep" --max-turns 60
           prompt: |
             You are landing one prepared change-set of a staged migration onto
@@ -162,6 +170,23 @@ jobs:
             file the cherry-pick did not touch, except to fix a validation this
             change-set broke. Do not add features, dependencies, or files that
             are not part of this change-set.
+
+      # TEMPORARY — delete along with show_full_output above. The action writes
+      # the raw execution log to a file and reports its path; when the run dies
+      # before the first model response, that file holds the actual API error
+      # and the step summary above usually does not.
+      - name: Dump the Claude execution log
+        if: always() && steps.claude.outputs.execution_file != ''
+        run: |
+          echo "conclusion: ${{ steps.claude.outputs.conclusion }}"
+          echo "execution_file: ${{ steps.claude.outputs.execution_file }}"
+          if [ -f "${{ steps.claude.outputs.execution_file }}" ]; then
+            # Registered secrets are masked by the runner, so this is the raw
+            # log with ${{ '***' }} in place of either token.
+            cat "${{ steps.claude.outputs.execution_file }}"
+          else
+            echo "no execution file was written — Claude Code exited before producing one"
+          fi
 
       # ------------------------------------------------------------ finished
 
