@@ -1,0 +1,26 @@
+{{- if .Values.serviceMonitor.enabled }}
+# Requires the Prometheus Operator CRDs. IFA exposes its own operational
+# metrics at /metrics — scrape successes and failures, staleness per target,
+# and how many findings the rule engine is producing.
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: {{ include "autopilot.fullname" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "autopilot.labels" . | nindent 4 }}
+    {{- with .Values.serviceMonitor.labels }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+spec:
+  selector:
+    matchLabels:
+      {{- include "autopilot.selectorLabels" . | nindent 6 }}
+  namespaceSelector:
+    matchNames:
+      - {{ .Release.Namespace }}
+  endpoints:
+    - port: http
+      path: /metrics
+      interval: {{ .Values.serviceMonitor.interval }}
+{{- end }}

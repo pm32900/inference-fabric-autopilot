@@ -1,0 +1,52 @@
+{{ .Chart.Name }} {{ .Chart.Version }} installed as "{{ .Release.Name }}" in namespace {{ .Release.Namespace }}.
+
+Reach the API:
+
+  kubectl -n {{ .Release.Namespace }} port-forward svc/{{ include "autopilot.fullname" . }} {{ .Values.service.port }}:{{ .Values.service.port }}
+  curl -s localhost:{{ .Values.service.port }}/api/v1/recommendations | jq .
+
+{{- if not .Values.config.collector.targets }}
+
+⚠  No scrape targets are configured, so IFA is watching nothing.
+
+   Add them under config.collector.targets, for example:
+
+     config:
+       collector:
+         targets:
+           - name: chat-llama3-8b
+             namespace: inference
+             runtime: vllm
+             model_name: meta-llama/Llama-3.1-8B-Instruct
+             metrics_url: http://chat-llama3-8b.inference.svc:8000/metrics
+             dcgm_url: http://dcgm-exporter.gpu-operator.svc:9400/metrics
+
+   Before adding one, check that the endpoint exposes what IFA needs:
+
+     ifa check http://chat-llama3-8b.inference.svc:8000/metrics -runtime vllm
+{{- else }}
+
+Watching {{ len .Values.config.collector.targets }} target(s):
+{{- range .Values.config.collector.targets }}
+  - {{ .namespace | default "default" }}/{{ .name }} ({{ .runtime }})
+    {{- if not .dcgm_url }}
+    no dcgm_url: GPU utilisation and memory will not be measured, and the GPU rules will not run
+    {{- end }}
+{{- end }}
+{{- end }}
+
+{{- if not .Values.image.tag }}
+
+Note: image.tag is unset, so the chart's appVersion ({{ .Chart.AppVersion }}) is
+used. Pin an explicit tag for reproducible upgrades.
+{{- end }}
+
+{{- if .Values.networkPolicy.enabled }}
+
+A NetworkPolicy is installed. IFA scrapes inference runtimes directly, not via
+Prometheus, so confirm networkPolicy.scrapeNamespaces and scrapePorts cover your
+workloads — otherwise every target will report as stale.
+{{- end }}
+
+IFA is read-only: it holds get/list/watch on deployments, pods and HPAs, and
+never creates, updates or deletes anything. See docs/SECURITY_MODEL.md.

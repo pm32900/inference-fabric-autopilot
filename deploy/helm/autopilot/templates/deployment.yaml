@@ -1,51 +1,104 @@
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: {{ include "autopilot.fullname" . }}-control-plane
+  name: {{ include "autopilot.fullname" . }}
   namespace: {{ .Release.Namespace }}
   labels:
     {{- include "autopilot.labels" . | nindent 4 }}
-    app.kubernetes.io/component: control-plane
 spec:
-  replicas: {{ .Values.controlPlane.replicas }}
+  replicas: {{ .Values.replicaCount }}
+  # IFA holds telemetry in memory, so a rolling update starts a replica with an
+  # empty store. Recreate keeps two instances from reporting different findings
+  # for the same workload during a rollout.
+  strategy:
+    type: Recreate
   selector:
     matchLabels:
       {{- include "autopilot.selectorLabels" . | nindent 6 }}
-      app.kubernetes.io/component: control-plane
   template:
     metadata:
+      annotations:
+        # Roll the pods when the configuration changes. Without this a
+        # `helm upgrade` that only edits thresholds updates the ConfigMap and
+        # leaves the running process on the old values.
+        checksum/config: {{ include (print $.Template.BasePath "/configmap.yaml") . | sha256sum }}
+        {{- with .Values.podAnnotations }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
       labels:
         {{- include "autopilot.selectorLabels" . | nindent 8 }}
-        app.kubernetes.io/component: control-plane
+        {{- with .Values.podLabels }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
     spec:
-      serviceAccountName: {{ .Values.serviceAccount.name | default (include "autopilot.fullname" .) }}
+      serviceAccountName: {{ include "autopilot.serviceAccountName" . }}
+      {{- with .Values.image.pullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      securityContext:
+        {{- toYaml .Values.podSecurityContext | nindent 8 }}
       containers:
         - name: control-plane
-          image: "{{ .Values.controlPlane.image.repository }}:{{ .Values.controlPlane.image.tag }}"
-          imagePullPolicy: {{ .Values.controlPlane.image.pullPolicy }}
+          image: {{ include "autopilot.image" . | quote }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          args:
+            - -config
+            - /etc/ifa/config.yaml
           ports:
             - name: http
-              containerPort: {{ .Values.controlPlane.port }}
+              containerPort: 8080
               protocol: TCP
+          env:
+            - name: IFA_LOG_LEVEL
+              value: {{ .Values.config.logging.level | quote }}
+            - name: IFA_CLUSTER_NAME
+              value: {{ .Values.config.cluster_name | quote }}
+            {{- if .Values.database.existingSecret }}
+            # Kept out of the ConfigMap: the DSN carries a password.
+            - name: IFA_DATABASE_DSN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.database.existingSecret }}
+                  key: {{ .Values.database.secretKey }}
+            {{- end }}
+            {{- with .Values.extraEnv }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
           livenessProbe:
-            httpGet:
-              path: /healthz
-              port: http
-            initialDelaySeconds: 5
-            periodSeconds: 15
+            {{- toYaml .Values.livenessProbe | nindent 12 }}
           readinessProbe:
-            httpGet:
-              path: /healthz
-              port: http
-            initialDelaySeconds: 3
-            periodSeconds: 10
+            {{- toYaml .Values.readinessProbe | nindent 12 }}
+          resources:
+            {{- toYaml .Values.resources | nindent 12 }}
+          securityContext:
+            {{- toYaml .Values.securityContext | nindent 12 }}
           volumeMounts:
             - name: config
-              mountPath: /config.yaml
-              subPath: config.yaml
-          resources:
-            {{- toYaml .Values.controlPlane.resources | nindent 12 }}
+              mountPath: /etc/ifa
+              readOnly: true
+            # readOnlyRootFilesystem is on, so anything that needs to write —
+            # the Go runtime's temporary files, for instance — needs somewhere
+            # to go.
+            - name: tmp
+              mountPath: /tmp
       volumes:
         - name: config
           configMap:
-            name: {{ include "autopilot.fullname" . }}-config
+            name: {{ include "autopilot.fullname" . }}
+        - name: tmp
+          emptyDir:
+            medium: Memory
+            sizeLimit: 16Mi
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
