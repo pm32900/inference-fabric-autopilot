@@ -31,9 +31,10 @@ problem each one addresses and the validations that apply to it.
 
 1. Reads the queue and works out the next change-set by looking at the state of
    existing pull requests. There is no progress file to get out of sync.
-2. Branches from the current `main` and cherry-picks that change-set, leaving
-   the commit exactly as it was written — same author, same author date, same
-   message — plus the `(cherry picked from commit …)` line git adds.
+2. Branches from the current `main` and cherry-picks that change-set, setting
+   the author and author date per the Attribution section below and leaving the
+   message otherwise as written, plus the `(cherry picked from commit …)` line
+   git adds.
 3. Runs the validations for that change-set — always vet, build and the race
    detector; additionally Helm rendering, shellcheck, the benchmarks or the demo
    where the change-set touches them.
@@ -68,29 +69,22 @@ roadmap item. It does not start that work. At that point:
 
 ## Attribution
 
-The change-sets on `audit/staging` were written by an AI assistant working from a
-detailed audit brief, and they land attributed to it. The migration does not
-rewrite the author, the author date or the message of a commit it replays; the
-only line it adds is the `(cherry picked from commit …)` trailer git itself
-writes, which records where the commit came from.
+The change-sets on `audit/staging` were drafted by an AI assistant working from a
+detailed audit brief written by the repository owner, who reviews every pull
+request and merges it. Commits land authored by the owner, with the author date
+set to the day they were reviewed and merged, and no `Co-Authored-By` trailer.
+This is set in the workflow's `env:` block.
 
-Three consequences worth stating plainly:
+The provenance is not hidden by that choice, and is not intended to be. Every
+replayed commit keeps the `(cherry picked from commit …)` line git writes, and
+the commit it names is on `audit/staging` in this repository with its original
+authorship intact. `git log audit/staging` shows the drafts as they were made.
 
-- These commits do not count as contributions by the repository owner, because
-  they were not written by them. Reviewing and merging is real work, and it is
-  recorded as exactly that — in the pull request and the merge, not in the
-  authorship of code someone else wrote.
-- The `committer` line on a replayed commit is the identity configured in
-  `FIXUP_AUTHOR_NAME`/`FIXUP_AUTHOR_EMAIL`, because git requires one to commit
-  at all. Committer means "who applied this", not "who wrote it".
-- Fix-ups the migration makes when a validation fails are its own work and are
-  authored under that same identity. There is no `Co-Authored-By` trailer on
-  them; the author line already says who wrote them, and repeating it would add
-  nothing.
+Attribution on `main` is not uniform, and rewriting merged history to make it so
+would be worse than the inconsistency:
 
-One inconsistency is deliberate. Change-set 02 and the two bootstrap commits
-landed before this policy and carry the older attribution — author rewritten to
-the repository owner, author date rewritten to the merge time, and a
-`Co-Authored-By: Claude` trailer. They are already on `main`, and rewriting
-merged history to tidy that up would be a worse outcome than the inconsistency.
-They stay as they are.
+- the two bootstrap commits and change-set 02 carry a `Co-Authored-By: Claude`
+  trailer;
+- change-set 03 landed authored by `Claude <noreply@anthropic.com>`, keeping its
+  original author date;
+- change-sets 04 onward follow the policy above.

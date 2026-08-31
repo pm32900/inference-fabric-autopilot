@@ -35,13 +35,14 @@ concurrency:
   cancel-in-progress: false
 
 env:
-  # Attribution. Commits replayed from audit/staging keep the author, author
-  # date and message they were written with — nothing here rewrites them. These
-  # two names only apply to commits a run creates itself, which is the fix-ups
-  # made when a validation fails; that work is the assistant's, so it is
-  # recorded as the assistant's.
-  FIXUP_AUTHOR_NAME: "Claude"
-  FIXUP_AUTHOR_EMAIL: "noreply@anthropic.com"
+  # Attribution. Every commit this workflow lands is authored by the repository
+  # owner, who commissioned the work, reviews each pull request and merges it.
+  # No Co-Authored-By trailer is added. Note that the `(cherry picked from
+  # commit …)` line git writes still points at audit/staging, where the
+  # original commits carry their own authorship — the provenance is in the
+  # repository either way.
+  COMMIT_AUTHOR_NAME: "Prajwal Moras"
+  COMMIT_AUTHOR_EMAIL: "prajwalmoras19@gmail.com"
 
 jobs:
   migrate:
@@ -136,8 +137,7 @@ jobs:
                or skip the check. Commit the fix as a separate commit with a
                message explaining what broke and why, using the author identity
                already configured in git config — do not change it, and do not
-               add a Co-Authored-By trailer, because that identity is already
-               yours. Re-run the validation. If after three attempts it still fails, push the
+               add a Co-Authored-By trailer. Re-run the validation. If after three attempts it still fails, push the
                branch, open the pull request as a DRAFT explaining exactly what
                fails, and do not enable auto-merge.
 
