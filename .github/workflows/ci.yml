@@ -4,47 +4,176 @@ on:
   push:
     branches: [main]
   pull_request:
-    branches: [main]
+
+# Cancel superseded runs on a branch: a PR pushed three times in a minute does
+# not need three full builds.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  # Must match the `go` directive in go.mod.
+  GO_VERSION: "1.24"
 
 jobs:
   test:
-    name: Build and Test
+    name: Test
     runs-on: ubuntu-latest
-
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
-      - name: Set up Go
-        uses: actions/setup-go@v5
+      - uses: actions/setup-go@v5
         with:
-          go-version: '1.21'
+          go-version: ${{ env.GO_VERSION }}
           cache: true
 
-      - name: Verify dependencies
-        run: go mod verify
+      - name: Formatting
+        run: |
+          unformatted=$(gofmt -l -s $(git ls-files '*.go'))
+          if [ -n "$unformatted" ]; then
+            echo "::error::these files are not gofmt-clean:"
+            echo "$unformatted"
+            exit 1
+          fi
 
-      - name: Build
-        run: go build ./...
+      - name: go.mod is tidy
+        run: |
+          go mod tidy
+          git diff --exit-code go.mod go.sum
 
       - name: Vet
         run: go vet ./...
 
+      - name: Build
+        run: go build ./...
+
+      # The race detector matters here: the collector scrapes targets
+      # concurrently and the telemetry store is read by HTTP handlers while the
+      # collector writes to it.
       - name: Test
-        run: go test -race -count=1 ./...
+        run: go test -race -count=1 -coverprofile=coverage.out -covermode=atomic ./...
 
-  lint-helm:
-    name: Helm Lint
+      - name: Coverage summary
+        run: go tool cover -func=coverage.out | tail -1 >> "$GITHUB_STEP_SUMMARY"
+
+  demo:
+    name: Demo smoke test
     runs-on: ubuntu-latest
-
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Set up Helm
-        uses: azure/setup-helm@v4
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
         with:
-          version: v3.14.0
+          go-version: ${{ env.GO_VERSION }}
+          cache: true
 
-      - name: Lint Helm chart
-        run: helm lint deploy/helm/autopilot/
+      # The demo is the first thing anyone evaluating this project runs. If it
+      # stops working, that should break the build rather than someone's
+      # first impression.
+      - name: Run the demo end to end
+        run: |
+          make build
+          IFA_DEMO_SETTLE=12 timeout 90 ./scripts/demo.sh > demo.log 2>&1 &
+          demo_pid=$!
+          for _ in $(seq 1 60); do
+            if curl -fsS localhost:8080/api/v1/readyz >/dev/null 2>&1; then break; fi
+            sleep 1
+          done
+          sleep 15
+          findings=$(curl -fsS localhost:8080/api/v1/recommendations | jq '.count')
+          echo "demo produced $findings finding(s)"
+          test "$findings" -ge 5
+          curl -fsS localhost:8080/metrics | grep -q '^ifa_scrapes_total'
+          kill $demo_pid 2>/dev/null || true
+
+      - name: Show demo output on failure
+        if: failure()
+        run: cat demo.log || true
+
+  lint-charts:
+    name: Helm chart
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: azure/setup-helm@v4
+        with:
+          version: v3.16.3
+
+      - name: Lint
+        run: helm lint deploy/helm/autopilot
+
+      - name: Render with defaults
+        run: helm template autopilot deploy/helm/autopilot > /dev/null
+
+      - name: Render with every optional feature enabled
+        run: |
+          helm template autopilot deploy/helm/autopilot \
+            --set networkPolicy.enabled=true \
+            --set podDisruptionBudget.enabled=true \
+            --set serviceMonitor.enabled=true \
+            --set replicaCount=2 \
+            --set rbac.scope=cluster \
+            --set database.existingSecret=ifa-db > /dev/null
+
+      # Catches a manifest that renders but that the API server would reject.
+      - name: Validate rendered manifests against the Kubernetes schema
+        run: |
+          curl -sSLo /tmp/kubeconform.tar.gz \
+            https://github.com/yannh/kubeconform/releases/download/v0.6.7/kubeconform-linux-amd64.tar.gz
+          tar -xzf /tmp/kubeconform.tar.gz -C /tmp
+          helm template autopilot deploy/helm/autopilot \
+            --set networkPolicy.enabled=true \
+            --set podDisruptionBudget.enabled=true \
+          | /tmp/kubeconform -strict -summary -kubernetes-version 1.30.0 \
+              -ignore-missing-schemas -
+
+  container:
+    name: Container image
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Build
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: deploy/docker/Dockerfile
+          push: false
+          load: true
+          tags: ifa:ci
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      # The image is distroless with no shell, so the only meaningful smoke
+      # test is that the entrypoint runs and reports its version.
+      - name: Smoke test
+        run: docker run --rm ifa:ci -version
+
+  shellcheck:
+    name: Shell scripts
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: sudo apt-get update && sudo apt-get install -y shellcheck
+      - run: shellcheck scripts/*.sh
+
+  vulncheck:
+    name: Vulnerability scan
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+      # govulncheck reports only vulnerabilities in code paths that are
+      # actually reachable, so a finding here is worth acting on rather than
+      # noise from an unused transitive dependency.
+      - name: govulncheck
+        run: |
+          go install golang.org/x/vuln/cmd/govulncheck@latest
+          govulncheck ./...
