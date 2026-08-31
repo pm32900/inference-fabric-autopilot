@@ -1,44 +1,28 @@
 ---
 name: Bug report
-about: Report a reproducible problem with P95 Autopilot
-title: '[bug] '
+about: Something behaves differently from what the docs describe
 labels: bug
-assignees: ''
 ---
 
 ## What happened
 
-A clear description of the bug.
+## What you expected
 
-## Steps to reproduce
+## Version and environment
 
-1.
-2.
-3.
+- IFA version: <!-- `ifa version`, or /api/v1/healthz -->
+- Runtime and version: <!-- e.g. vLLM 0.9.1, Triton 24.08 -->
+- Kubernetes version, if relevant:
+- Installed via: <!-- Helm / helm template / binary / make demo -->
 
-## Expected behavior
+## Reproduction
 
-What you expected to happen.
-
-## Actual behavior
-
-What actually happened. Include any error messages or log output.
-
-## Environment
-
-- P95 Autopilot version / commit:
-- Go version (`go version`):
-- Kubernetes version (`kubectl version`):
-- OS:
-- Collector mode (`simulated` or `prometheus`):
-- Database enabled (`true` / `false`):
-
-## Relevant logs
-
+<!-- If a target is involved, this is usually the single most useful thing: -->
 ```
-paste logs here
+ifa check http://your-target:8000/metrics -runtime vllm -model your-model
 ```
 
-## Additional context
+## Relevant output
 
-Anything else that might help diagnose the issue.
+<!-- Logs, or the finding you disagree with. Findings carry their evidence:
+     `ifa recommendations -code IFA-XXX-NNN` includes the numbers and thresholds. -->
