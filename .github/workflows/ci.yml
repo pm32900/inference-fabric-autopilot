@@ -32,7 +32,8 @@ jobs:
 
       - name: Formatting
         run: |
-          unformatted=$(gofmt -l -s $(git ls-files '*.go'))
+          mapfile -t go_files < <(git ls-files '*.go')
+          unformatted=$(gofmt -l -s "${go_files[@]}")
           if [ -n "$unformatted" ]; then
             echo "::error::these files are not gofmt-clean:"
             echo "$unformatted"
