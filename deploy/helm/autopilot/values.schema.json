@@ -1,0 +1,72 @@
+{
+  "$schema": "https://json-schema.org/draft-07/schema#",
+  "title": "Inference Fabric Autopilot chart values",
+  "description": "Validated by Helm at install time, so a malformed value is rejected before it reaches the cluster.",
+  "type": "object",
+  "properties": {
+    "replicaCount": { "type": "integer", "minimum": 1 },
+    "image": {
+      "type": "object",
+      "properties": {
+        "registry": { "type": "string" },
+        "repository": { "type": "string", "minLength": 1 },
+        "tag": { "type": "string" },
+        "pullPolicy": { "type": "string", "enum": ["Always", "IfNotPresent", "Never"] },
+        "pullSecrets": { "type": "array" }
+      },
+      "required": ["repository"]
+    },
+    "service": {
+      "type": "object",
+      "properties": {
+        "type": { "type": "string", "enum": ["ClusterIP", "NodePort", "LoadBalancer"] },
+        "port": { "type": "integer", "minimum": 1, "maximum": 65535 }
+      }
+    },
+    "rbac": {
+      "type": "object",
+      "properties": {
+        "create": { "type": "boolean" },
+        "scope": {
+          "type": "string",
+          "enum": ["namespace", "cluster"],
+          "description": "namespace grants a Role in the watched namespace; cluster grants a ClusterRole and is required only when watching all namespaces."
+        }
+      }
+    },
+    "config": {
+      "type": "object",
+      "properties": {
+        "collector": {
+          "type": "object",
+          "properties": {
+            "targets": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "name": { "type": "string", "minLength": 1 },
+                  "namespace": { "type": "string" },
+                  "runtime": { "type": "string", "enum": ["vllm", "triton"] },
+                  "model_name": { "type": "string" },
+                  "metrics_url": { "type": "string", "pattern": "^https?://" },
+                  "dcgm_url": { "type": "string", "pattern": "^https?://" },
+                  "deployment": { "type": "string" }
+                },
+                "required": ["name", "runtime", "metrics_url"],
+                "additionalProperties": false
+              }
+            }
+          }
+        },
+        "logging": {
+          "type": "object",
+          "properties": {
+            "level": { "type": "string", "enum": ["debug", "info", "warn", "error"] },
+            "format": { "type": "string", "enum": ["json", "text"] }
+          }
+        }
+      }
+    }
+  }
+}

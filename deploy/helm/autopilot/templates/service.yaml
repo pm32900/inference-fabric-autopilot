@@ -1,18 +1,20 @@
 apiVersion: v1
 kind: Service
 metadata:
-  name: {{ include "autopilot.fullname" . }}-control-plane
+  name: {{ include "autopilot.fullname" . }}
   namespace: {{ .Release.Namespace }}
   labels:
     {{- include "autopilot.labels" . | nindent 4 }}
-    app.kubernetes.io/component: control-plane
+  {{- with .Values.service.annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
 spec:
-  type: ClusterIP
+  type: {{ .Values.service.type }}
   ports:
-    - port: {{ .Values.controlPlane.port }}
+    - name: http
+      port: {{ .Values.service.port }}
       targetPort: http
       protocol: TCP
-      name: http
   selector:
     {{- include "autopilot.selectorLabels" . | nindent 4 }}
-    app.kubernetes.io/component: control-plane

@@ -1,6 +1,34 @@
 apiVersion: v2
 name: autopilot
-description: Inference Fabric Autopilot — telemetry collector and recommender
+description: Read-only diagnostics and recommendations for LLM inference workloads on Kubernetes
 type: application
-version: 0.1.0
-appVersion: "0.1.0"
+
+# The chart version tracks the chart; appVersion tracks the IFA release it
+# installs by default. Both move together for now.
+version: 0.2.0
+appVersion: "0.2.0"
+
+kubeVersion: ">=1.25.0-0"
+
+home: https://github.com/pm32900/inference-fabric-autopilot
+sources:
+  - https://github.com/pm32900/inference-fabric-autopilot
+
+keywords:
+  - vllm
+  - llm
+  - inference
+  - observability
+  - gpu
+  - mlops
+  - sre
+
+maintainers:
+  - name: pm32900
+    url: https://github.com/pm32900
+
+annotations:
+  artifacthub.io/license: Apache-2.0
+  artifacthub.io/operator: "false"
+  # Everything this chart grants is get/list/watch. See docs/RBAC_PERMISSIONS.md.
+  artifacthub.io/containsSecurityUpdates: "false"

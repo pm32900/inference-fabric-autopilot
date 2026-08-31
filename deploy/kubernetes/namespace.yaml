@@ -1,6 +1,0 @@
-apiVersion: v1
-kind: Namespace
-metadata:
-  name: inference-autopilot
-  labels:
-    app.kubernetes.io/part-of: inference-fabric-autopilot
