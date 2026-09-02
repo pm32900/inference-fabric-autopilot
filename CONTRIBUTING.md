@@ -42,7 +42,7 @@ Changes that violate these will not be merged.
 
 ## Getting set up
 
-Go 1.24 or newer, and nothing else for building, testing and running the demo.
+Go 1.25 or newer, and nothing else for building, testing and running the demo.
 
 ```bash
 git clone https://github.com/pm32900/inference-fabric-autopilot
