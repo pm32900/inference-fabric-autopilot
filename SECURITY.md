@@ -2,81 +2,62 @@
 
 ## Status
 
-P95 Autopilot is **alpha-stage software** under active development.
-It is not production-hardened and has not undergone a formal security audit.
-Use it in non-production or controlled environments only.
-
-## Read-only design guarantee
-
-P95 Autopilot is architecturally read-only with respect to Kubernetes:
-
-- It does **not** create, update, patch, or delete any Kubernetes resource.
-- It does **not** exec into pods or run commands inside containers.
-- It does **not** modify inference workload configuration.
-- It does **not** collect prompt bodies, response bodies, request headers, or user identifiers.
-- All Kubernetes API access is via a ClusterRole with only `get`,`list`, and `watch` verbs.
-
-See [docs/SECURITY_MODEL.md](./docs/SECURITY_MODEL.md) for the full threat model and
-[docs/RBAC_PERMISSIONS.md](./docs/RBAC_PERMISSIONS.md) for the exact RBAC definition.
-
-## Data collection boundaries
-
-P95 Autopilot collects only infrastructure-level metrics:
-
-- Kubernetes workload metadata (pod name, namespace, runtime, replica count)
-- Prometheus metrics from inference workload `/metrics` endpoints (latency, queue depth, token throughput, KV cache usage)
-- No user-identifying data, no request payloads, no model inputs or outputs
-
-See [docs/DATA_COLLECTION.md](./docs/DATA_COLLECTION.md) for the complete field-level inventory.
+Alpha software. It has not been through a security audit and the HTTP API is
+unauthenticated. Deploy it where that is acceptable, and read
+[docs/SECURITY_MODEL.md](docs/SECURITY_MODEL.md) — including the section on what
+it does *not* defend against — before putting it in a production namespace.
 
 ## Supported versions
 
-No formal support policy exists yet. This project follows a rolling alpha model.
-Security fixes will be applied to the latest commit on `main`.
-
-| Version | Supported |
-|---|---|
-| `main` (latest) | ✅ Best effort |
-| Any tagged release | ⚠️ No formal SLA |
+The most recent release only. There are no maintained release branches yet.
 
 ## Reporting a vulnerability
 
-**Please do not open a public GitHub issue for security vulnerabilities.**
+Use GitHub's private vulnerability reporting on this repository
+([Security → Report a vulnerability](https://github.com/pm32900/inference-fabric-autopilot/security/advisories/new)).
+Please do not open a public issue for anything exploitable.
 
-To report a security issue:
+Include what you did, what happened, and what an attacker would gain. A proof of
+concept helps but is not required.
 
-1. Email the maintainer directly. The contact address is in the GitHub profile associated with this repository.
-2. Include a description of the vulnerability, steps to reproduce, and potential impact.
-3. Allow up to 14 days for an initial response.
+This is a single-maintainer project: expect an acknowledgement within a few days
+rather than within hours, and a fix on a best-effort timeline. If that is not
+fast enough for your disclosure policy, say so in the report and we will agree
+something.
 
-We will acknowledge receipt, assess the report, and coordinate disclosure.
-For alpha-stage software, we aim to patch and release fixes quickly rather than follow a long embargo window.
+## Scope
 
-## Known limitations and accepted risks
+**In scope:** anything that lets IFA write to the Kubernetes API or its scrape
+targets; anything that lets a scrape target execute code, escape the container,
+or exhaust the host; credential leakage; a path where prompt or response content
+reaches IFA.
 
-The following are known alpha-stage limitations, not vulnerabilities:
+**Known and out of scope**, because they are documented design limitations
+rather than vulnerabilities:
 
-- **No mTLS between components.** The control plane HTTP API is unauthenticated by default. Deploy behind a Kubernetes Service with network-level access controls.
-- **Default database password.** `config.yaml` ships with a placeholder DSN (`postgres://postgres:autopilot@...`). Change this before any deployment that exposes the DB.
-- **No RBAC on the HTTP API.** The `/telemetry`, `/recommendations`, and `/workloads` endpoints do not require authentication. Restrict access via NetworkPolicy or ingress rules.
-- **Prometheus scrape targets are not authenticated.** Metrics URLs in config are fetched over plain HTTP. Use in-cluster service names to avoid exposure.
+- The HTTP API is unauthenticated and unencrypted. Access control is
+  network-level. See the NetworkPolicy in the chart.
+- There is no rate limiting on the API.
+- A rule can produce a wrong finding. IFA is read-only precisely because it will
+  sometimes be wrong; every finding carries the evidence behind it so you can
+  check.
+- Released images are not signed and no SBOM is published yet.
 
-## Security-relevant configuration
+If you think one of those is worse than the documentation implies, that is worth
+a report.
 
-```yaml
-# Set deployment_mode to airgapped to disable egress at the config layer
-deployment_mode: airgapped
+## What IFA guarantees
 
-egress:
-  enabled: false
+Verifiable rather than promised — the RBAC is one file and every handler goes
+through one wrapper:
 
-# Privacy flags — all false by default and enforced at startup
-privacy:
-  collect_prompt_bodies: false
-  collect_response_bodies: false
-  collect_headers: false
-  collect_user_identifiers: false
+- No `create`, `update`, `patch` or `delete` on any Kubernetes resource, and no
+  pod subresources.
+- No exec into containers.
+- No prompt bodies, response bodies, request headers or user identifiers.
+- No outbound connections beyond the configured scrape targets, the Kubernetes
+  API and the optional database. No licence check, no telemetry, no update
+  check.
 
-# RBAC posture — only valid value is read-only
-rbac:
-  mode: read-only
+[docs/RBAC_PERMISSIONS.md](docs/RBAC_PERMISSIONS.md) lists every permission with
+the `kubectl auth can-i` commands to confirm them yourself.
