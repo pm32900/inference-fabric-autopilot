@@ -2,7 +2,7 @@
 
 ## Prerequisites
 
-Go 1.24 or newer. That is the whole list for building, testing and running the
+Go 1.25 or newer. That is the whole list for building, testing and running the
 demo. Helm and Docker are needed only for the chart and image targets.
 
 ## The loop
