@@ -1,186 +1,114 @@
-# Roadmap — Inference Fabric Autopilot
+# Roadmap
 
-**Version:** Phase 2.5
-**Last updated:** 2026-06
-**Maintainer:** Solo founder project
+Status language is deliberate. "Implemented" means the code exists and is unit
+tested. "Validated" means it has been run against the real thing — and almost
+nothing here has earned that word yet, which is the single most important fact
+on this page.
 
----
-
-## Principles
-
-- Ship working, testable software at each phase — no vaporware milestones.
-- Keep the system read-only until autonomous action is explicitly scoped and
-  security-reviewed.
-- Prioritise design-partner feedback over assumed requirements.
-- Stay Go-first. No new language runtimes without a clear justification.
-
----
-
-## Status Legend
-
-| Symbol | Meaning |
+| Term | Means |
 |---|---|
-| ✅ | Complete |
-| 🔄 | In progress |
-| 📋 | Planned — committed to next phase |
-| 💡 | Considered — not yet committed |
-| ❌ | Out of scope for now |
+| **Implemented** | Code exists, has tests, and is exercised by CI |
+| **Locally validated** | Additionally exercised end to end against a simulated system |
+| **Integration validated** | Additionally run against a real server or cluster |
+| **Experimental** | Exists, but the design may change |
+| **Planned** | Not started |
 
----
+## Where things stand
 
-## Phase 1 — Core Foundation
-**Status: ✅ Complete**
-
-| Feature | Status |
+| Area | Status |
 |---|---|
-| Go control plane with HTTP API (`/healthz`, `/telemetry`, `/recommendations`) | ✅ |
-| Simulated telemetry for 4 workloads (vLLM, Triton, Ollama) | ✅ |
-| In-memory telemetry store with rolling window | ✅ |
-| Rule-based recommender — 8 rules | ✅ |
-| TimescaleDB backend (optional) | ✅ |
-| Typed config with YAML loading and defaults | ✅ |
-| client-go pod watcher (read-only) | ✅ |
-| Prometheus metric collector | ✅ |
-| Node-agent DaemonSet stub | ✅ |
-| `ifa` CLI (telemetry, recommendations, workloads commands) | ✅ |
-| Dockerfiles for control plane and node agent | ✅ |
-| Helm chart | ✅ |
-| Kubernetes raw manifests | ✅ |
-| 18/18 tests passing | ✅ |
-| Local kind cluster deployment | ✅ |
+| Prometheus exposition parsing — labels, histograms, summaries, edge cases | Locally validated |
+| Rule engine — 19 rules, suppression, sustained conditions | Locally validated |
+| vLLM adapter | Implemented |
+| Triton adapter | Implemented |
+| DCGM adapter | Implemented |
+| HTTP API, `/api/v1` and legacy paths | Implemented |
+| `ifa` CLI including `ifa check` | Implemented |
+| Self-metrics | Implemented |
+| Kubernetes discovery via informers | Implemented |
+| Helm chart, RBAC, NetworkPolicy, security contexts | Implemented |
+| TimescaleDB history | Implemented |
+| Demo and its end-to-end test | Locally validated |
 
----
+"Locally validated" for the parser, rules and demo means `make demo` and
+`TestDemoScenariosProduceTheirIntendedDiagnosis` run the whole pipeline over a
+real socket against vLLM-shaped exposition, and each simulated failure mode
+produces its intended diagnosis.
 
-## Phase 2 — Alpha Hardening
-**Status: ✅ Complete**
+Nothing is integration validated. That is the honest state of the project.
 
-| Feature | Status |
-|---|---|
-| Prometheus collector connected to real workload metrics | ✅ |
-| Configurable scrape targets per workload | ✅ |
-| KV-cache usage rule | ✅ |
-| TTFT P95 rule | ✅ |
-| Full typed config including all recommender thresholds | ✅ |
-| Helm chart with configmap-driven config | ✅ |
-| kind deployment with port-forward access | ✅ |
+## Next, in order
 
----
+### 1. Validate against a live vLLM server
 
-## Phase 2.5 — Restricted-Environment Readiness
-**Status: 🔄 In progress**
+The highest-value thing that could happen to this project, and it is not code.
+Every metric name, label and bucket boundary comes from vLLM's own source, and
+the fixtures are built from those definitions — but a fixture built from a spec
+and a real payload are not the same artifact, and the first version of this
+adapter is proof: it passed its tests and could not read a real server.
 
-Goal: Make IFA deployable and auditable in air-gapped, regulated, or
-security-reviewed environments. No new runtime behaviour — foundation only.
+What would close it: `ifa check` output from a real vLLM deployment, plus the
+version. Ten seconds of someone's time. If you run vLLM, [open an
+issue](https://github.com/pm32900/inference-fabric-autopilot/issues) with the
+output.
 
-| Feature | Status |
-|---|---|
-| `docs/ARCHITECTURE.md` | ✅ |
-| `docs/SECURITY_MODEL.md` | ✅ |
-| `docs/DATA_COLLECTION.md` | ✅ |
-| `docs/RBAC_PERMISSIONS.md` | ✅ |
-| `docs/AIRGAPPED_DEPLOYMENT.md` | ✅ |
-| `docs/OPERATIONS_RUNBOOK.md` | ✅ |
-| `docs/DESIGN_PARTNER_PILOT.md` | ✅ |
-| `docs/ROADMAP.md` | ✅ |
-| `internal/config/config.go` — add `deploymentMode`, `egress`, `privacy`, `rbac`, `prometheus` fields | 📋 |
-| `internal/config/config_test.go` — air-gap defaults, privacy defaults | 📋 |
-| `deploy/helm/autopilot/values-airgapped.yaml` | 📋 |
-| `deploy/helm/autopilot/templates/networkpolicy.yaml` | 📋 |
-| `scripts/export-airgap-bundle.sh` | 📋 |
-| `scripts/load-airgap-bundle.sh` | 📋 |
-| `README.md` update pointing to `docs/` | 📋 |
+### 2. A kind-based integration test in CI
 
----
+Install the chart into a kind cluster, run a small CPU-mode vLLM, assert that
+IFA discovers it, scrapes it, and produces findings. This is what would move
+Kubernetes discovery and the chart from "implemented" to "integration
+validated", and it would catch the class of bug — an RBAC rule that is one verb
+short, a Service port that does not match — that unit tests structurally cannot.
 
-## Phase 3 — Observability and Operator UX
-**Status: 📋 Planned**
+### 3. Per-pod GPU attribution
 
-Goal: Make IFA useful enough for a design partner to run daily without manual
-intervention. Still read-only.
+A DCGM Exporter endpoint reports the GPUs on a *node*, not the GPUs belonging to
+one pod. On a node running several inference workloads, the utilisation IFA
+attributes to a target may belong to something else. DCGM's Kubernetes-aware
+labels carry pod and namespace; using them needs a mapping from workload to pods
+that the informer cache already has.
 
-| Feature | Status |
-|---|---|
-| Control plane self-metrics endpoint (`/metrics` for Prometheus scrape of IFA itself) | 📋 |
-| Structured JSON logging throughout (request logging, scrape outcomes) | 📋 |
-| Per-workload recommendation history (last N recommendations, not just current) | 📋 |
-| `ifa` CLI — `watch` mode (continuous refresh, like `kubectl get pods -w`) | 📋 |
-| `ifa` CLI — `--output json/yaml/table` flag for all commands | 📋 |
-| Config hot-reload without pod restart | 📋 |
-| Helm chart — resource limits configurable per environment size | 📋 |
-| Helm chart — separate ServiceAccounts for control plane and node agent | 📋 |
-| Recommendation severity levels (info / warning / critical) | 📋 |
-| TimescaleDB retention policy configuration | 📋 |
+Until this lands, GPU findings are trustworthy on dedicated GPU nodes and
+approximate on shared ones. The docs say so; the API does not yet.
 
----
+### 4. Per-workload thresholds
 
-## Phase 4 — Signal Expansion
-**Status: 💡 Considered**
+Thresholds are global. A batch scoring pipeline and an interactive chat endpoint
+have genuinely different definitions of "slow", and sharing one set means either
+the batch workload is permanently on fire or the chat endpoint's real problems
+are under the line. A per-target override block, falling back to the global set,
+is the obvious shape.
 
-Goal: Increase the quality and coverage of telemetry signals to reduce false
-positives and enable more nuanced recommendations.
+### 5. A finding lifecycle
 
-| Feature | Status |
-|---|---|
-| Node-agent real metric collection (GPU device metrics without eBPF) | 💡 |
-| Per-pod resource request vs. actual usage comparison | 💡 |
-| Model cold-start detection (first-token latency spike on scale-up) | 💡 |
-| Batch vs. streaming workload differentiation | 💡 |
-| Multi-namespace fleet view (single control plane, N namespaces) | 💡 |
-| OpenTelemetry trace integration (read-only, span latency bucketing) | 💡 |
-| Workload cost estimation (GPU-hours × request volume) | 💡 |
+Findings are stateless: each request re-evaluates from scratch. IDs are stable
+while a condition holds, which is enough to deduplicate, but there is no
+first-seen timestamp, no flap suppression, and no way to acknowledge one. Any of
+those would need durable state and should not be built before someone actually
+wants it.
 
----
+## Considered and not planned
 
-## Phase 5 — Controlled Automation
-**Status: 💡 Considered — requires explicit security review before commitment**
+**Automatic remediation.** IFA holds no write permission and will not gain one.
+See [ADR 0001](adr/0001-read-only.md).
 
-Goal: Allow IFA to take narrow, well-defined, reversible actions — only with
-explicit operator opt-in and hard safety constraints.
+**A built-in dashboard.** Grafana exists and is better at this. A Grafana
+dashboard JSON that reads IFA's API would be a welcome contribution; a
+hand-rolled UI in this repository would not be maintained.
 
-This phase will not start until:
-- At least one design partner has validated Phase 3 recommendations as
-  accurate and actionable
-- A write-permission threat model has been reviewed
-- Each action type is individually gated behind a config flag defaulting to `false`
+**Machine-learned anomaly detection.** [ADR 0004](adr/0004-deterministic-rules.md).
+There is nothing credible to train on, and an unexplainable finding is not
+actionable at 3am.
 
-| Feature | Status |
-|---|---|
-| Horizontal scaling recommendations with optional dry-run mode | 💡 |
-| Annotation-based action approval (operator annotates a workload to allow a specific action) | 💡 |
-| Audit log of every action attempted and its outcome | 💡 |
-| Rollback tracking (did the action improve or worsen the signal?) | 💡 |
-| Hard limits (max replica count, min replica count, no action on prod namespaces without explicit opt-in) | 💡 |
+**More runtimes for their own sake.** An Ollama adapter existed here and was
+removed: its only route to throughput numbers was to treat per-request response
+statistics as cumulative counters, which produces numbers that look plausible
+and mean nothing. One adapter that is right beats three that are shallow.
+SGLang and TGI both expose Prometheus metrics and would be genuine additions —
+from someone who runs them and can check the output.
 
-**Autonomous action without operator approval is not on the roadmap.**
+## Toward v1.0
 
----
-
-## Permanently Out of Scope
-
-These will not be built unless a design partner presents a compelling and
-specific case:
-
-| Item | Reason |
-|---|---|
-| Prompt or response body collection | Privacy. No use case justifies it for infrastructure recommendations. |
-| External SaaS dependency at runtime | Air-gap compatibility. Self-hosted only. |
-| eBPF-based kernel tracing | Complexity and privilege requirements outweigh benefit at this stage. |
-| Rust rewrite | Go is sufficient. Rewriting for performance is premature. |
-| Web dashboard / UI | CLI + API is sufficient for operator use. UI is high-effort, low-priority. |
-| Cloud-managed version | Out of scope for a self-hosted, air-gap-first product. |
-
----
-
-## Versioning
-
-IFA uses a simple phase-based version label during alpha:
-
-| Label | Meaning |
-|---|---|
-| Phase 1 | Core foundation complete |
-| Phase 2 | Alpha hardening complete |
-| Phase 2.5 | Restricted-environment readiness complete |
-| Phase 3+ | Follows semantic versioning once stable enough for design-partner production use |
-
-There is no SemVer commitment until Phase 3 is complete. Breaking changes
-between phases are expected and will be documented in release notes.
+Not close. It would need, at minimum: integration validation against real vLLM
+and a real cluster; authentication on the API; per-workload thresholds; signed
+images and an SBOM; and a stable API used by somebody other than the author.

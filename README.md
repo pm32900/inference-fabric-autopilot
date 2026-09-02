@@ -1,278 +1,256 @@
-# P95 Autopilot
+# Inference Fabric Autopilot
 
-**by P95 Labs**
+**Read-only diagnostics for LLM inference workloads on Kubernetes.** It reads what vLLM and Triton already expose, combines those signals with Kubernetes state, and tells you *which* problem a workload has — not just that a number crossed a line.
 
-> A read-only Kubernetes-native diagnostics and recommendation system for AI inference workloads.
-
-
+[![CI](https://github.com/pm32900/inference-fabric-autopilot/actions/workflows/ci.yml/badge.svg)](https://github.com/pm32900/inference-fabric-autopilot/actions/workflows/ci.yml)
+[![Go Reference](https://pkg.go.dev/badge/github.com/pm32900/inference-fabric-autopilot.svg)](https://pkg.go.dev/github.com/pm32900/inference-fabric-autopilot)
+[![Go Report Card](https://goreportcard.com/badge/github.com/pm32900/inference-fabric-autopilot)](https://goreportcard.com/report/github.com/pm32900/inference-fabric-autopilot)
 [![License](https://img.shields.io/badge/license-Apache%202.0-blue.svg)](./LICENSE)
-![Status: Alpha](https://img.shields.io/badge/status-alpha-orange.svg)
+![Status: alpha](https://img.shields.io/badge/status-alpha-orange.svg)
 
 ---
 
-> **Alpha status.** This project is under active development. APIs, config schema,
-> and metric mappings may change without notice. Not production-hardened.
-> Do not use it as a control plane in production without understanding its current limitations.
+## The problem
 
----
+Your inference workload has a deep request queue. Prometheus told you so. What do you do?
 
-## What it does
+It depends entirely on a signal that is not in the alert. If the GPU is saturated, you need capacity — and raising the concurrency limit will make it worse. If the GPU is idle, you have an admission or batching limit — and adding replicas will burn budget without touching the queue. Same metric, same threshold, opposite fixes.
 
-P95 Autopilot watches AI inference workloads running on Kubernetes, collects
-Prometheus telemetry, and produces actionable recommendations — without touching
-anything it observes.
+That pattern repeats across inference. A KV cache at 97% is not a problem; a KV cache at 97% *that is preempting requests* is. A slow time-to-first-token caused by queueing needs replicas; the same number caused by prefill needs chunked prefill and prefix caching, and replicas will not help. Dashboards show you all of these numbers. Deciding which situation you are in is left to whoever is on call.
 
-- Scrapes Prometheus `/metrics` endpoints from inference pods (vLLM supported today)
-- Watches Kubernetes pod and workload state via `client-go`
-- Evaluates 11 rule-based recommendations per scrape: GPU pressure, KV cache saturation, queue depth, p95/p99 latency, TTFT degradation, error rate, token throughput, autoscaling lag
-- Exposes a JSON HTTP API (`/telemetry`, `/recommendations`, `/workloads`, `/healthz`)
-- Ships a CLI (`ifa`) for terminal-based inspection
-- Runs fully in-cluster — no external SaaS, no phone-home, no internet required
-- Supports air-gapped / restricted-environment deployment via a packaged bundle
+## What this does
 
-## What it does not do
+IFA scrapes the runtime metrics you already have, joins them with Kubernetes replica state, and evaluates rules that **combine signals and require conditions to persist**. Each finding names the rule that produced it, the measurements that triggered it, and the thresholds they were compared against, so you can disagree with it without reading the source.
 
-- Does **not** create, update, patch, or delete any Kubernetes resource
-- Does **not** exec into pods or run commands inside containers
-- Does **not** collect prompt bodies, response payloads, or user-identifying data
-- Does **not** call external APIs at runtime
-- Does **not** make autonomous changes to workloads
+```
+[WARNING]   IFA-CAP-002  Requests queueing while the GPU is idle
+  workload:  inference/embeddings-bge (vllm)
+  why:       29 requests have been waiting for 5s while GPU utilisation stayed below 35%.
+             The accelerator has capacity that the scheduler is not handing work to —
+             typically a concurrency cap (max_num_seqs), a batch-size limit, or a
+             per-request memory reservation that is far larger than the requests need.
+  action:    Raise the runtime's concurrency limit (max_num_seqs for vLLM) or its batch
+             size, and check max_model_len — an oversized value reserves KV blocks per
+             sequence and caps how many can run at once. Adding replicas will not help
+             here.
+  evidence:
+             requests_waiting = 29.40 requests (> 8)  ← vllm:num_requests_waiting
+             gpu_utilization_percent = 12 percent (< 35)
+             kv_cache_usage_percent = 8.34 percent  ← vllm:kv_cache_usage_perc
+  sustained: 5s
+```
 
----
+## Try it in 60 seconds
+
+No cluster, no GPU, no vLLM deployment:
+
+```bash
+git clone https://github.com/pm32900/inference-fabric-autopilot
+cd inference-fabric-autopilot
+make demo
+```
+
+`make demo` stands up seven simulated inference workloads that serve **real vLLM-format Prometheus exposition over HTTP** — vLLM's metric names, vLLM's histogram bucket boundaries — and points the actual collector at them. The parser, the histogram quantile estimation, the counter-to-rate conversion and the rule engine are all the code that ships. Nothing is pre-canned.
+
+```
+WORKLOAD                      RUNTIME  RUNNING  WAITING  KV%   GPU%  TTFT-P95  E2E-P95  TOK/S  AGE
+inference/assistant-qwen-14b  vllm     30       77       82.7  94    6.91s     15.67s   706    0s
+inference/batch-scoring       vllm     26       33       77.1  96    4.39s     10.49s   1408   0s
+inference/chat-llama3-8b      vllm     8        2        64.8  65    243ms     4.49s    908    0s
+inference/embeddings-bge      vllm     2        29       8.3   12    4.65s     4.80s    61     0s
+inference/legacy-serving      vllm     4        1        -     -     -         -        -      0s
+inference/rag-llama3-70b      vllm     6        0        60.4  92    8.00s     25.33s   89     0s
+inference/summarise-mixtral   vllm     16       7        97.9  89    2.13s     35.27s   434    0s
+
+A dash means the runtime did not report that metric. It is not a zero.
+
+15 finding(s): 3 critical, 9 warning, 3 info
+```
+
+One of those seven is healthy and produces nothing. The others each demonstrate a different diagnosis — capacity shortage, admission misconfiguration, KV-cache exhaustion, prefill-bound latency, an autoscaler at its ceiling, and a runtime whose telemetry is too sparse to judge. [The end-to-end test](internal/demo/demo_test.go) asserts each one still reproduces its failure mode, so the demo cannot quietly rot.
+
+## Why not just Prometheus and Grafana?
+
+You should have both; IFA reads the same data. The difference is what happens after the number moves.
+
+| | Prometheus alert rules | IFA |
+|---|---|---|
+| Deep queue | one alert, one threshold | separates *GPU saturated* from *GPU idle* — opposite fixes |
+| KV cache at 97% | fires, whether or not it matters | reports the preemption rate, which is what actually hurts |
+| Slow TTFT | one alert | splits queueing time from prefill time and names the fix for each |
+| Missing metrics | silence, indistinguishable from health | an explicit "telemetry incomplete" finding |
+| Output | "value > threshold" | rule code, evidence, threshold, and a suggested action |
+
+The honest boundary: IFA has no query language, no long-range history worth speaking of, no alerting pipeline, and no dashboards. It is a diagnostic layer that sits beside your monitoring stack, not a replacement for it. If your question is "what did p95 look like last Tuesday", use Prometheus.
 
 ## Architecture
 
-```
-┌─────────────────────────────────────────────────────┐
-│                   Kubernetes Cluster                 │
-│                                                     │
-│  ┌──────────────────────────────────────────────┐   │
-│  │           P95 Autopilot Control Plane        │   │
-│  │                                              │   │
-│  │  ┌─────────────┐   ┌──────────────────────┐ │   │
-│  │  │  Collector  │   │     Recommender      │ │   │
-│  │  │  (Prometheus│──▶│  11 rule-based rules │ │   │
-│  │  │  + k8s pod  │   │  vLLM-aware          │ │   │
-│  │  │  watcher)   │   └──────────────────────┘ │   │
-│  │  └─────────────┘            │                │   │
-│  │         │                   ▼                │   │
-│  │         ▼           ┌──────────────┐         │   │
-│  │  ┌─────────────┐    │  HTTP API    │         │   │
-│  │  │  Telemetry  │    │  /telemetry  │         │   │
-│  │  │  Store      │    │  /recommend. │         │   │
-│  │  │  (in-memory │    │  /workloads  │         │   │
-│  │  │  + optional │    │  /healthz    │         │   │
-│  │  │  TimescaleDB│    └──────────────┘         │   │
-│  │  └─────────────┘                             │   │
-│  └──────────────────────────────────────────────┘   │
-│                           ▲                         │
-│                    read-only scrape                  │
-│                           │                         │
-│  ┌────────────┐   ┌────────────────┐                │
-│  │ vLLM pod   │   │  Other inference│               │
-│  │ /metrics   │   │  workloads     │                │
-│  └────────────┘   └────────────────┘                │
-└─────────────────────────────────────────────────────┘
-```
+```mermaid
+flowchart LR
+  subgraph cluster["Kubernetes cluster"]
+    vllm["vLLM pods<br/>/metrics"]
+    triton["Triton pods<br/>/metrics"]
+    dcgm["DCGM Exporter<br/>/metrics"]
+    api["Kubernetes API<br/>deployments · pods · HPAs"]
+  end
 
-All Kubernetes API access uses `get`, `list`, and `watch` verbs only.
-See [docs/ARCHITECTURE.md](./docs/ARCHITECTURE.md) for the full component map and data flow.
+  subgraph ifa["IFA control plane (single Deployment)"]
+    collector["Collector<br/>bounded, concurrent scrapes"]
+    adapters["Runtime adapters<br/>vLLM · Triton · DCGM"]
+    store["Telemetry store<br/>bounded in-memory window"]
+    engine["Rule engine<br/>cross-signal, sustained"]
+    http["HTTP API + /metrics"]
+  end
 
----
+  vllm -- "GET" --> collector
+  triton -- "GET" --> collector
+  dcgm -- "GET" --> collector
+  api -- "watch (get/list/watch)" --> collector
 
-## Quickstart (local, no cluster needed)
+  collector --> adapters --> store --> engine --> http
+  store -. "optional history" .-> ts[("TimescaleDB")]
 
-```bash
-git clone https://github.com/<your-username>/inference-fabric-autopilot.git
-cd inference-fabric-autopilot
+  http --> cli["ifa CLI"]
+  http --> prom["Prometheus / dashboards"]
 
-# Run with simulated telemetry — no Kubernetes or database required
-go run ./cmd/control-plane/
+  classDef ro stroke-dasharray: 4 3;
+  class vllm,triton,dcgm,api ro;
 ```
 
-```bash
-# In another terminal
-curl http://localhost:8080/healthz
-curl http://localhost:8080/telemetry | jq .
-curl http://localhost:8080/recommendations | jq .
-```
+Dashed boxes are read-only: IFA issues GETs and watches, and holds no verb that can change anything. [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) covers the execution model, failure behaviour and extension points.
 
-See [`examples/sample-telemetry.json`](./examples/sample-telemetry.json) and
-[`examples/sample-recommendations.json`](./examples/sample-recommendations.json)
-for the shape of the API responses.
+## What it reads
 
----
+| Source | Signals |
+|---|---|
+| **vLLM** | running/waiting requests and *why* they are waiting, KV-cache utilisation, preemptions, TTFT / end-to-end / queue-time histograms, prompt and generation token counters, prefix-cache hit rate, finished-request reasons |
+| **Triton** | pending requests, success and failure counters by reason, GPU utilisation and memory, latency summaries when enabled |
+| **DCGM Exporter** | real GPU utilisation, framebuffer usage, temperature — the only source of these; no inference runtime reports them |
+| **Kubernetes** | desired/ready replicas, HPA ceilings, container restart counts |
 
-## CLI
+Metric names, units and version differences are documented in [docs/RUNTIMES.md](docs/RUNTIMES.md), along with what has and has not been validated against a live server.
 
-```bash
-# Build the CLI
-go build -o ifa ./cmd/ifa/
+## Rules
 
-# Usage
-./ifa telemetry          # Show latest telemetry snapshots
-./ifa recommendations    # Show current recommendations
-./ifa workloads          # Show Kubernetes-discovered workloads
+Nineteen rules across seven families. Each has a permanent code, a severity, and a documented trigger:
 
-# Point at a non-default control plane
-IFA_URL=http://my-cluster:8080 ./ifa recommendations
-```
-
----
-
-## API endpoints
-
-| Method | Path | Description |
+| Code | Fires when | Severity |
 |---|---|---|
-| `GET` | `/healthz` | Liveness check — returns `ok` |
-| `GET` | `/telemetry` | Latest telemetry snapshot per workload |
-| `GET` | `/recommendations` | Current recommendations across all workloads |
-| `GET` | `/workloads` | Kubernetes-discovered inference workloads |
+| `IFA-CAP-001` | Sustained queue **and** saturated GPU — out of compute | warning |
+| `IFA-CAP-002` | Sustained queue **and** idle GPU — admission or batching limit | warning |
+| `IFA-CAP-003` | Queue is growing, not merely deep | critical |
+| `IFA-CAP-004` | Waiting requests are deferred, not capacity-bound — scaling will not help | warning |
+| `IFA-KV-001` | KV cache exhausted: the engine is preempting and recomputing work | critical |
+| `IFA-KV-002` | KV cache near capacity with no preemption — headroom, not harm | warning |
+| `IFA-LAT-001` | TTFT above target, dominated by queueing | warning |
+| `IFA-LAT-002` | TTFT above target, dominated by prefill | warning |
+| `IFA-SCL-001` | Queueing while already at the HPA's replica ceiling | critical |
+| `IFA-OBS-001` | Expected metrics absent — coverage is partial, not clean | info |
 
-All responses are JSON. No authentication is required (alpha limitation — restrict via NetworkPolicy).
+[The full catalogue](docs/RECOMMENDATIONS.md) documents all nineteen, including the reasoning behind every default threshold. The running instance serves it too: `curl localhost:8080/api/v1/rules`.
 
----
-
-## Recommendation rules
-
-| Rule | Trigger | Severity |
-|---|---|---|
-| 1 | GPU idle with queue pressure | warning |
-| 2 | p95 latency exceeds threshold | warning |
-| 3 | p99 latency exceeds threshold | warning |
-| 4 | GPU memory near capacity | critical |
-| 5 | High error rate | critical |
-| 6 | Queue depth exceeds threshold | warning |
-| 7 | Low token throughput at high GPU utilization | info |
-| 8 | Autoscaling lag (replicas too low for RPS) | warning |
-| 9 | vLLM queue pressure (num_requests_waiting) | warning |
-| 10 | vLLM KV cache near capacity | critical |
-| 11 | vLLM p95 TTFT degradation | warning |
-
-Rules 9–11 fire only for `runtime: vllm` workloads.
-
----
-
-## Running tests
+## Install
 
 ```bash
-go test ./...
-go vet ./...
-```
-
-Expected output:
-```
-ok  github.com/.../internal/config
-ok  github.com/.../internal/recommender
-ok  github.com/.../internal/runtime/vllm
-ok  github.com/.../internal/telemetry
-```
-
----
-
-## Deploy to Kubernetes
-
-**Standard (Helm):**
-```bash
-kubectl create namespace inference
-
 helm install autopilot deploy/helm/autopilot \
-  --namespace inference \
-  --values deploy/helm/autopilot/values.yaml \
-  --wait
-
-kubectl port-forward -n inference svc/autopilot 8080:8080 &
-curl http://localhost:8080/healthz
+  --namespace inference --create-namespace \
+  --set image.tag=v0.2.0 \
+  --set-json 'config.collector.targets=[{
+      "name":"chat-llama3-8b",
+      "namespace":"inference",
+      "runtime":"vllm",
+      "model_name":"meta-llama/Llama-3.1-8B-Instruct",
+      "metrics_url":"http://chat-llama3-8b.inference.svc:8000/metrics",
+      "dcgm_url":"http://dcgm-exporter.gpu-operator.svc:9400/metrics"
+    }]'
 ```
 
-**Air-gapped:**
+Before adding a target, check that the endpoint exposes what IFA needs — a silently half-working integration is the most common failure mode of anything that reads someone else's metrics:
+
+```
+$ ifa check http://chat-llama3-8b.inference.svc:8000/metrics \
+    -runtime vllm -model wrong-model-name
+
+Target:  http://chat-llama3-8b.inference.svc:8000/metrics
+Runtime: vllm
+Model:   wrong-model-name
+Payload: 122 bytes, 2 metric families, 0 unparseable line(s)
+
+STATUS            METRIC
+MISSING           vllm:num_requests_running
+MISSING           vllm:num_requests_waiting
+MISSING           vllm:kv_cache_usage_perc
+MISSING           vllm:time_to_first_token_seconds
+...
+optional, absent  vllm:request_queue_time_seconds
+optional, absent  vllm:num_requests_waiting_by_reason
+
+8 required metric(s) missing. Rules that depend on them will not run.
+For vLLM: confirm the server was not started with --disable-log-stats,
+and that -model matches the model_name label on the series.
+Models present in this payload: llama
+```
+
+[docs/DEPLOYMENT.md](docs/DEPLOYMENT.md) covers Helm values, offline/air-gapped installation, and RBAC scoping.
+
+## API and CLI
+
 ```bash
-# On internet-connected machine
-./scripts/export-airgap-bundle.sh
+curl -s localhost:8080/api/v1/recommendations | jq '.items[0]'
+curl -s localhost:8080/api/v1/telemetry?namespace=inference | jq .
+curl -s localhost:8080/api/v1/rules | jq '.items[].code'
+curl -s localhost:8080/metrics            # IFA's own operational metrics
 
-# Transfer airgap-bundle.tar.gz to restricted machine, then:
-./scripts/load-airgap-bundle.sh airgap-bundle.tar.gz --runtime docker
+ifa recommendations -severity critical
+ifa telemetry -workload chat-llama3-8b
 ```
 
-See [docs/AIRGAPPED_DEPLOYMENT.md](./docs/AIRGAPPED_DEPLOYMENT.md) for the full procedure.
-
----
-
-## Configuration
-
-`config.yaml` at the repo root controls all runtime behaviour:
-
-```yaml
-collector:
-  mode: prometheus          # or: simulated
-  interval_seconds: 15
-  prometheus_targets:
-    - workload_name: my-vllm
-      namespace: inference
-      runtime: vllm
-      model_name: meta-llama/Meta-Llama-3-8B
-      metrics_url: http://vllm-service:8000/metrics
-
-recommender:
-  thresholds:
-    high_p95_latency_ms: 500.0
-    high_queue_depth: 10
-    high_gpu_mem_pct: 85.0
-
-privacy:
-  collect_prompt_bodies: false
-  collect_response_bodies: false
-  collect_user_identifiers: false
-```
-
----
+Every endpoint is a GET; the API cannot change anything. Unmeasured values serialise as `null`, never as `0`. Full reference with request and response examples: [docs/API.md](docs/API.md).
 
 ## Security posture
 
-- ClusterRole uses `get`, `list`, `watch` only — no write verbs
-- No prompt/response body collection by design
-- NetworkPolicy template included for egress restriction
-- HTTP API is unauthenticated (alpha limitation) — restrict with NetworkPolicy or ingress
-- Default `config.yaml` DSN is a placeholder — change before any real deployment
+- **Read-only by construction.** RBAC grants `get`, `list`, `watch` on deployments, pods and HPAs, and nothing else. There is no code path that writes to the Kubernetes API. Every HTTP handler is a GET, enforced in one place.
+- **No prompt or response data.** IFA reads Prometheus counters and gauges. Request and response bodies never enter the process.
+- **No outbound connections** beyond the scrape targets you configure and the Kubernetes API. No licence check, no telemetry, no update check.
+- **Runs unprivileged**: non-root, read-only root filesystem, all capabilities dropped, seccomp `RuntimeDefault`.
+- **The API is unauthenticated.** This is the significant limitation. It exposes operational metadata about your inference fleet, and the only access control is network-level. Restrict it with a NetworkPolicy or an authenticating proxy.
 
-See [SECURITY.md](./SECURITY.md) and [docs/SECURITY_MODEL.md](./docs/SECURITY_MODEL.md).
+[docs/SECURITY_MODEL.md](docs/SECURITY_MODEL.md) has the threat model and the full list of what is not defended against.
 
----
+## Status
 
-## Project status
+Alpha. It works, it is tested, and it is honest about what it has not proven.
 
-| Phase | Description | Status |
-|---|---|---|
-| Phase 1 | Core foundation — API, collector, recommender, CLI | ✅ Complete |
-| Phase 2 | Alpha hardening — config, dual telemetry backend, Helm | ✅ Complete |
-| Phase 2.5 | Restricted-environment readiness — air-gap, RBAC, NetworkPolicy | ✅ Complete |
-| Phase 3 | vLLM runtime validation — metrics adapter, parser, rules 9–11 | ✅ Complete |
-| Phase 4 | GPU utilization via DCGM, counter-rate computation, histogram support | ✅ Complete |
-| Phase 5 | Multi-runtime support (Triton, Ollama), operator UX improvements | 📋 Planned |
-
-See [docs/ROADMAP.md](./docs/ROADMAP.md) for details.
-
----
-
-## Documentation
-
-| Document | Description |
+| Area | Status |
 |---|---|
-| [docs/ARCHITECTURE.md](./docs/ARCHITECTURE.md) | Component map, data flow, dependencies |
-| [docs/SECURITY_MODEL.md](./docs/SECURITY_MODEL.md) | Threat model, trust boundaries, read-only posture |
-| [docs/DATA_COLLECTION.md](./docs/DATA_COLLECTION.md) | Exact list of what is and is not collected |
-| [docs/RBAC_PERMISSIONS.md](./docs/RBAC_PERMISSIONS.md) | Every Kubernetes API verb, annotated |
-| [docs/AIRGAPPED_DEPLOYMENT.md](./docs/AIRGAPPED_DEPLOYMENT.md) | Step-by-step air-gapped deployment guide |
-| [docs/OPERATIONS_RUNBOOK.md](./docs/OPERATIONS_RUNBOOK.md) | Health checks, config changes, troubleshooting |
-| [docs/VLLM_VALIDATION.md](./docs/VLLM_VALIDATION.md) | vLLM metrics, validation guide, known limitations |
-| [docs/ROADMAP.md](./docs/ROADMAP.md) | Phase-by-phase roadmap with honest status |
+| Prometheus exposition parsing (labels, histograms, counters) | Implemented, tested against fixtures and edge cases |
+| vLLM adapter | Implemented against vLLM's V1 metric definitions; **not yet run against a live vLLM server** |
+| Triton adapter | Implemented from the documented metric surface; **not yet run against a live Triton server** |
+| DCGM adapter | Implemented and unit-tested; **not yet run against real hardware** |
+| Rule engine | Implemented, tested at boundaries, exercised end to end by the demo |
+| Kubernetes discovery (informers) | Implemented; **not yet exercised in CI against a real cluster** |
+| TimescaleDB history | Implemented, bounded and non-blocking; **no integration test** |
+| HTTP API | Implemented and tested |
 
----
+The gap that matters most is the last mile: everything is validated against fixtures built from the runtimes' own metric definitions, not against live servers. If you run vLLM and are willing to point `ifa check` at it, that report is the single most useful contribution right now. [docs/ROADMAP.md](docs/ROADMAP.md) is explicit about what "validated" would mean.
+
+## Known limitations
+
+- The API is unauthenticated (above).
+- One instance holds telemetry in memory; running two replicas gives you two independent views, not a shared one. The chart uses `Recreate` for this reason.
+- Percentiles from histogram-backed runtimes are interpolated from bucket boundaries and inherit their resolution. A p95 that lands in vLLM's `+Inf` bucket is reported as the largest finite boundary, which understates it.
+- Without a DCGM endpoint, GPU utilisation and memory are simply not measured, and the rules that need them do not run. IFA reports that rather than substituting a proxy.
+- vLLM exposes no failure counter, so no error rate is derived for vLLM targets. The abort share is reported instead.
+- Thresholds are global, not per-workload. A batch pipeline and a chat endpoint currently share one definition of "slow".
 
 ## Contributing
 
-See [CONTRIBUTING.md](./CONTRIBUTING.md). Open an issue before starting non-trivial work.
+Adding a runtime means implementing one interface ([`runtime.Adapter`](internal/runtime/adapter.go)) and one line in a registry. Adding a rule means one function in [`internal/recommender/rules.go`](internal/recommender/rules.go). Both are covered in [CONTRIBUTING.md](CONTRIBUTING.md); [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md) has the local workflow.
+
+```bash
+make verify   # gofmt, vet, race tests, chart lint
+```
 
 ## License
 
-Apache 2.0 — see [LICENSE](./LICENSE).
+Apache 2.0 — see [LICENSE](LICENSE).

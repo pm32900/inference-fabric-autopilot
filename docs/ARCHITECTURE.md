@@ -1,236 +1,170 @@
-# Architecture — Inference Fabric Autopilot
+# Architecture
 
-**Version:** Phase 2.5  
-**Last updated:** 2026-06
+## Goals and non-goals
 
----
+**Goals.** Turn the telemetry an inference runtime already exposes into a small
+number of explained, checkable diagnoses; do it without any ability to change
+what it observes; and be usable by someone who has not read the source.
 
-## Overview
-
-IFA is a passive observer. It reads metric and cluster state data, stores it
-locally, and produces recommendations. It never writes to Kubernetes and never
-calls external services at runtime.
-
-```
-┌─────────────────────────────────────────────────────────────────┐
-│                        Kubernetes Cluster                       │
-│                                                                 │
-│  ┌──────────────────────────────────────────────────────────┐   │
-│  │                  inference namespace                     │   │
-│  │                                                          │   │
-│  │   ┌─────────────────────┐    ┌────────────────────────┐  │   │
-│  │   │  ifa-control-plane  │    │  Inference Workloads   │  │   │
-│  │   │  (Deployment, x1)   │    │  vLLM / Triton / Ollama│  │   │
-│  │   │                     │    │  (user-managed pods)   │  │   │
-│  │   │  - HTTP API         │    └────────────┬───────────┘  │   │
-│  │   │  - Recommender      │                 │ /metrics     │   │
-│  │   │  - Collector        │◄────Prometheus──┘              │   │
-│  │   │  - Telemetry store  │    scrape (pull, in-cluster)   │   │
-│  │   └──────────┬──────────┘                                │   │
-│  │              │ read-only                                  │   │
-│  │              ▼                                            │   │
-│  │   ┌─────────────────────┐                                │   │
-│  │   │  Kubernetes API     │                                │   │
-│  │   │  Server (in-cluster)│                                │   │
-│  │   │  get/list/watch     │                                │   │
-│  │   │  pods, nodes,       │                                │   │
-│  │   │  deployments        │                                │   │
-│  │   └─────────────────────┘                                │   │
-│  │                                                          │   │
-│  │   ┌─────────────────────┐                                │   │
-│  │   │  ifa-node-agent     │                                │   │
-│  │   │  (DaemonSet)        │                                │   │
-│  │   │  one pod per node   │                                │   │
-│  │   │  stub — reports     │                                │   │
-│  │   │  node identity      │                                │   │
-│  │   └─────────────────────┘                                │   │
-│  │                                                          │   │
-│  │   ┌─────────────────────┐  (optional)                    │   │
-│  │   │  TimescaleDB        │◄──── control-plane writes      │   │
-│  │   │  (in-cluster)       │      telemetry snapshots only  │   │
-│  │   └─────────────────────┘                                │   │
-│  └──────────────────────────────────────────────────────────┘   │
-│                                                                 │
-└─────────────────────────────────────────────────────────────────┘
-
-          │ kubectl port-forward or in-cluster service
-          ▼
-   ┌─────────────┐
-   │   ifa CLI   │  (runs outside cluster, operator laptop)
-   └─────────────┘
-```
-
----
+**Non-goals.** IFA is not a metrics store, a query engine, an alerting pipeline,
+or a dashboard, and it does not remediate. Those exist and are good. IFA is the
+layer that decides *which* problem you have, and it assumes Prometheus is doing
+the rest.
 
 ## Components
 
-### ifa-control-plane
-
-- **Language:** Go 1.22
-- **Kind:** Kubernetes Deployment, 1 replica
-- **Namespace:** `inference` (configurable)
-- **Exposed ports:** 8080 (HTTP, internal only — no Ingress by default)
-
-**Responsibilities:**
-- Serves the HTTP API (`/healthz`, `/telemetry`, `/recommendations`)
-- Runs the metric collector on a configurable interval
-- Maintains an in-memory telemetry store (rolling window)
-- Optionally persists snapshots to TimescaleDB
-- Watches Kubernetes pods and nodes via client-go informers (read-only)
-- Runs the rule-based recommender engine on each collection cycle
-
-**What it does NOT do:**
-- Does not patch, create, or delete any Kubernetes resource
-- Does not send data outside the cluster
-- Does not read prompt or response content from inference pods
-
----
-
-### ifa-node-agent
-
-- **Language:** Go 1.22
-- **Kind:** Kubernetes DaemonSet (one pod per schedulable node)
-- **Current state:** Stub — reports node identity on startup
-- **Planned:** Future local metric collection (GPU device metrics, node-level
-  resource pressure) without requiring privileged access
-
----
-
-### ifa CLI (`ifa`)
-
-- **Language:** Go 1.22, compiled binary
-- **Runs:** On the operator's workstation, outside the cluster
-- **Transport:** HTTP over `kubectl port-forward` or an in-cluster `ClusterIP` service
-
-Commands:
 ```
-ifa telemetry         Print current telemetry snapshot for all workloads
-ifa recommendations   Print active recommendations
-ifa workloads         List watched workloads and their runtime metadata
+cmd/control-plane      wiring, lifecycle, signal handling
+cmd/ifa                terminal client; talks only to the HTTP API
+
+internal/promtext      Prometheus text-format parser: labels, histograms, summaries
+internal/runtime       the adapter contract shared by every runtime
+  ../vllm              vLLM adapter
+  ../triton            Triton adapter
+  ../dcgm              DCGM Exporter adapter
+internal/collector     scrape loop, counter-to-rate conversion, GPU overlay
+internal/telemetry     the shared measurement model and the in-memory store
+internal/recommender   rule registry, evaluation, suppression
+internal/k8s           workload discovery via shared informers
+internal/api           read-only HTTP API
+internal/metrics       IFA's own operational metrics
+internal/storage/timescale   optional durable history
+internal/demo          simulated inference fleet for the demo and the e2e test
 ```
 
----
+## Data flow
 
-### Telemetry Store
+One scrape cycle, per target:
 
-Two backends, selectable at runtime:
+1. **Fetch.** `collector` issues a bounded GET: a hard timeout, a response size
+   cap, and no redirect following.
+2. **Parse.** The runtime adapter turns the payload into a `Reading`: a partly
+   filled `telemetry.Snapshot` of instantaneous values, plus raw counter values
+   under runtime-agnostic keys, plus the list of expected metrics that were
+   absent.
+3. **Rate.** The collector differences each counter against the previous scrape.
+   A first observation and a counter reset both produce "not measured", never
+   zero.
+4. **Overlay.** If a DCGM endpoint is configured, GPU utilisation and memory are
+   read from it and taken as the maximum across devices.
+5. **Join.** Replica counts and the HPA ceiling come from the informer cache.
+6. **Store.** The snapshot goes into a bounded in-memory window and, if
+   configured, onto the durable sink's queue.
 
-| Backend | Config | Use case |
-|---|---|---|
-| In-memory | default | Development, short-lived deployments, air-gapped minimal installs |
-| TimescaleDB | `database.enabled: true` | Persistent history, trend queries |
+Evaluation happens on request, not on a timer: `GET /api/v1/recommendations`
+runs the rule set against the current store. Rules are cheap — the benchmark
+covers fifty workloads with two minutes of history each — and evaluating on
+demand means a finding always reflects the newest telemetry rather than whenever
+the last background pass happened to run.
 
-The in-memory store holds a fixed rolling window of snapshots per workload.
-No data leaves the store. No external time-series SaaS is used.
+## Concurrency model
 
----
+- **One goroutine per scrape**, bounded by a semaphore sized to
+  `collector.concurrency`. Serial scraping makes the effective interval depend
+  on how many targets are slow; unbounded scraping turns a large fleet into a
+  thundering herd.
+- **The telemetry store** is a `sync.RWMutex` around a map of slices. Writes come
+  from scrape goroutines, reads from HTTP handlers. It is small enough that a
+  more elaborate structure would be harder to reason about for no measurable
+  gain.
+- **The durable sink** owns exactly one writer goroutine behind a bounded
+  channel. `Write` never blocks; when the queue is full it drops and counts.
+  The earlier design started a goroutine per snapshot, which grows without limit
+  whenever the database is unreachable — the observability tool taking down its
+  own pod.
+- **Informers** run their own goroutines inside client-go. IFA reads from the
+  lister cache and never issues a request on the read path.
+- **The rate tracker** is a mutex-guarded map keyed by workload and counter name.
 
-### Recommender Engine
+Everything is cancelled through one `context.Context` derived from
+`signal.NotifyContext`.
 
-8 rule-based rules evaluated per workload per collection cycle:
+## Failure behaviour
 
-| Rule | Signal | Trigger |
-|---|---|---|
-| GPU underutilisation | `gpu_utilisation_pct` | < `low_gpu_util_pct` threshold |
-| GPU memory pressure | `gpu_memory_used_pct` | > `high_gpu_mem_pct` threshold |
-| High P95 latency | `p95_latency_ms` | > `high_p95_latency_ms` threshold |
-| High queue depth | `queue_depth` | > `high_queue_depth` threshold |
-| High error rate | `error_rate_pct` | > `high_error_rate_pct` threshold |
-| RPS-to-replica ratio | `requests_per_second` / replicas | > `min_replicas_for_rps` threshold |
-| High KV-cache usage | `kv_cache_usage_pct` | > `high_kv_cache_usage_pct` threshold |
-| High TTFT P95 | `ttft_p95_ms` | > `high_ttft_p95_ms` threshold |
+The rule is that IFA degrades to "I cannot see this" rather than to "everything
+looks fine".
 
-All thresholds are configurable in `config.yaml`.
-
----
-
-## Data Flow
-
-```
-Prometheus /metrics endpoint (in-cluster)
-        │
-        │  HTTP GET (pull, interval-based)
-        ▼
-  collector.Collect()
-        │
-        │  MetricSnapshot struct
-        ▼
-  telemetry.Store.Write()
-        │
-        ├──► in-memory ring buffer (always)
-        └──► TimescaleDB INSERT (if enabled)
-                │
-                ▼
-  recommender.Evaluate(snapshot)
-        │
-        │  []Recommendation
-        ▼
-  HTTP API — /telemetry, /recommendations
-        │
-        │  JSON response
-        ▼
-  ifa CLI or any HTTP client
-```
-
-No data moves outside this chain. The Kubernetes API watch runs in a separate
-goroutine and feeds workload metadata (pod counts, labels) into the collector
-context only.
-
----
-
-## Deployment Modes
-
-### Standard
-
-```
-collector.mode: prometheus   (or simulated for dev)
-kubernetes.enabled: true
-database.enabled: false      (or true if TimescaleDB is available)
-```
-
-Images pulled from wherever `controlPlane.image.repository` points.
-No NetworkPolicy applied by default.
-
-### Air-gapped
-
-```
-deploymentMode: airgapped
-egress.enabled: false
-collector.mode: prometheus
-prometheus.url: http://prometheus.inference.svc.cluster.local:9090
-```
-
-- All images pre-loaded onto nodes or pushed to an internal registry
-- `imagePullPolicy: Never` (or `IfNotPresent` pointing at internal mirror)
-- NetworkPolicy: default-deny-egress on the `inference` namespace
-- Explicit allow only for: Kubernetes API server, local Prometheus, local TimescaleDB
-- No DNS lookups to external domains at runtime
-
-See [AIRGAPPED_DEPLOYMENT.md](./AIRGAPPED_DEPLOYMENT.md) for the full procedure.
-
----
-
-## External Dependencies at Runtime
-
-| Dependency | Type | Required | Notes |
-|---|---|---|---|
-| Kubernetes API server | In-cluster | Yes (when `kubernetes.enabled: true`) | Read-only. Always in-cluster. |
-| Prometheus | In-cluster | Yes (when `collector.mode: prometheus`) | Pull only. Must be reachable inside cluster. |
-| TimescaleDB | In-cluster | No | Only if `database.enabled: true`. In-cluster only. |
-
-**There are no external SaaS, cloud, or internet dependencies at runtime.**
-
----
-
-## Technology Stack
-
-| Layer | Technology |
+| Failure | Behaviour |
 |---|---|
-| Language | Go 1.22 |
-| HTTP framework | `net/http` (stdlib) |
-| Kubernetes client | `client-go` v0.29 |
-| Config | `gopkg.in/yaml.v3` |
-| Database (optional) | TimescaleDB (PostgreSQL extension) |
-| Packaging | Docker, Helm 3 |
-| Local dev cluster | kind |
-| Metrics source | Prometheus (pull model) |
+| Scrape target unreachable | No snapshot written. `ifa_scrape_errors_total` increments. Once the newest sample ages past `stale_after`, `IFA-OBS-002` fires. |
+| Target returns garbage | Unparseable lines are counted and logged; whatever parsed is used. A consistently non-zero count means the exposition format moved. |
+| Target exposes a subset | Missing metrics are recorded on the snapshot; `IFA-OBS-001` reports them; rules that need them stay dormant. |
+| Counter reset (pod restart) | The interval reports "not measured" rather than a rate of zero, and re-baselines. |
+| DCGM endpoint down | The inference telemetry is still recorded; GPU fields are unmeasured; GPU rules stay dormant. |
+| Kubernetes API unavailable | Discovery is skipped with a warning; scraping and diagnosis continue; scaling rules stay dormant. Startup is *not* refused. |
+| Database unavailable at startup | Startup fails. Enabling history and silently not writing it is worse than a clear failure. |
+| Database fails later | Writes are dropped and counted in `ifa_database_dropped_total`. Diagnostics are unaffected — the rule engine only reads memory. |
+| Invalid configuration | Startup fails with the offending field named. |
+| Workload deleted | Its telemetry ages out and is pruned; it disappears from the API. |
+| SIGTERM | HTTP server drains within `shutdown_timeout`, collector stops, sink drains its queue. |
+
+## Trust boundaries
+
+```
+    ┌─────────────────────── untrusted input ────────────────────────┐
+    │  Runtime /metrics payloads       DCGM /metrics payloads         │
+    └────────────────────────────┬───────────────────────────────────┘
+                                 │  size-capped, timeout-bounded,
+                                 │  parsed without regexp or reflection
+    ┌────────────────────────────▼───────────────────────────────────┐
+    │  IFA process — no writes anywhere, no shell, no filesystem     │
+    └────────────────────────────┬───────────────────────────────────┘
+                                 │  get / list / watch only
+    ┌────────────────────────────▼───────────────────────────────────┐
+    │  Kubernetes API                                                 │
+    └────────────────────────────────────────────────────────────────┘
+```
+
+Scrape payloads are attacker-influenced in the sense that whoever controls a
+watched pod controls what IFA parses. The parser allocates proportionally to
+input, the input is capped, and nothing parsed is ever executed, interpolated
+into a query, or written anywhere. The configured target list is the trust
+anchor: IFA only ever fetches URLs an operator put in the config, and those are
+restricted to `http` and `https` at load time.
+
+Details and the list of what is *not* defended against: [SECURITY_MODEL.md](SECURITY_MODEL.md).
+
+## Design decisions
+
+Recorded as short ADRs:
+
+- [0001 — Read-only, no remediation](adr/0001-read-only.md)
+- [0002 — Runtime adapters as pure functions](adr/0002-runtime-adapters.md)
+- [0003 — TimescaleDB optional and non-blocking](adr/0003-optional-timescaledb.md)
+- [0004 — Deterministic rules, not learned models](adr/0004-deterministic-rules.md)
+- [0005 — Measurements are optional values](adr/0005-optional-measurements.md)
+
+## Extension points
+
+**A new runtime** means implementing `runtime.Adapter` — three methods, no state
+— and adding one line to the registry in `internal/collector/collector.go`.
+Adapters are pure functions from an exposition payload to a `Reading`, so they
+are tested against a fixture with no HTTP, no clock and no store.
+
+**A new rule** means one function returning a `Rule` and one line in
+`DefaultRules()`. A rule declares its severity, the runtimes it applies to, and
+any codes it supersedes; the engine handles ordering, ID generation and
+suppression.
+
+**A new sink** means implementing `telemetry.Sink` (one method) and attaching it
+with `telemetry.WithSink`.
+
+## Scale characteristics
+
+Not benchmarked against a real fleet — this is what the design implies, not a
+measurement.
+
+- Memory is bounded by `retention_samples × workloads`. A snapshot is roughly
+  600 bytes, so 200 workloads at the default 120 samples is on the order of
+  15 MB.
+- Parsing cost is linear in payload size. `BenchmarkParseV1` covers a realistic
+  vLLM payload; run `make bench` for numbers on your hardware rather than
+  trusting a figure written here.
+- Rule evaluation is linear in workloads × rules × window length, and runs per
+  API request. `BenchmarkAnalyze` covers fifty workloads with two minutes of
+  history.
+- Kubernetes load is one List plus a watch per resource type, not a List per
+  interval.
+- The likely first bottleneck is API-request rate, because evaluation is
+  synchronous. If that becomes real, caching one analysis per scrape interval is
+  the obvious fix; it has not been needed.

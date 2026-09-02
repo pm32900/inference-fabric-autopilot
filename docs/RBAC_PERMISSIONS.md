@@ -1,209 +1,93 @@
-# RBAC Permissions — Inference Fabric Autopilot
+# Kubernetes permissions
 
-**Version:** Phase 2.5
-**Last updated:** 2026-06
+Every permission IFA requests, why it needs it, and what stops working without
+it.
 
----
-
-## Summary
-
-IFA requires one `ClusterRole` with read-only verbs across a small set of
-Kubernetes resources. It requests no write permissions, no escalation, and no
-access to sensitive resources such as Secrets, ConfigMaps, or cluster-admin
-equivalents.
-
----
-
-## ClusterRole Definition
-
-This is the exact role applied by both the raw manifest
-(`deploy/kubernetes/clusterrole.yaml`) and the Helm chart
-(`deploy/helm/autopilot/templates/rbac.yaml`).
+## The complete set
 
 ```yaml
-apiVersion: rbac.authorization.k8s.io/v1
-kind: ClusterRole
-metadata:
-  name: inference-autopilot-reader
-rules:
-  - apiGroups: [""]
-    resources: ["pods", "nodes", "namespaces"]
-    verbs: ["get", "list", "watch"]
-  - apiGroups: ["apps"]
-    resources: ["deployments", "daemonsets", "replicasets"]
-    verbs: ["get", "list", "watch"]
+- apiGroups: ["apps"]
+  resources: ["deployments"]
+  verbs: ["get", "list", "watch"]
+
+- apiGroups: [""]
+  resources: ["pods"]
+  verbs: ["get", "list", "watch"]
+
+- apiGroups: ["autoscaling"]
+  resources: ["horizontalpodautoscalers"]
+  verbs: ["get", "list", "watch"]
 ```
 
----
+That is all of it. No `create`, `update`, `patch`, `delete`, `deletecollection`,
+`bind`, `escalate` or `impersonate`. No `pods/exec`, `pods/portforward`,
+`pods/log`, or any other subresource. No secrets, no configmaps, no nodes, no
+events, no CRDs.
 
-## Permission Breakdown — Annotated
+## Why each one
 
-### Core API group (`""`)
-
-| Resource | Verbs | Why needed | Risk |
-|---|---|---|---|
-| `pods` | `get`, `list`, `watch` | Identify running inference workloads by label; track pod-to-node mapping | Read-only. Pod spec and status only. No exec, no log access. |
-| `nodes` | `get`, `list`, `watch` | Node health context for recommendations (capacity, conditions) | Read-only. No node-level exec or privileged access. |
-| `namespaces` | `get`, `list`, `watch` | Enumerate namespaces when watching cross-namespace workloads | Read-only. Namespace metadata only. |
-
-### Apps API group (`apps`)
-
-| Resource | Verbs | Why needed | Risk |
-|---|---|---|---|
-| `deployments` | `get`, `list`, `watch` | Replica count for RPS-per-replica recommendation rule | Read-only. No rollout, scale, or patch operations. |
-| `daemonsets` | `get`, `list`, `watch` | Track node-agent DaemonSet health | Read-only. |
-| `replicasets` | `get`, `list`, `watch` | Resolve deployment → replicaset → pod ownership chain | Read-only. |
-
----
-
-## Permissions Explicitly Not Requested
-
-The following permissions are **not present** in any IFA role and are never
-needed:
-
-| Category | Examples | Status |
+| Resource | Used for | Without it |
 |---|---|---|
-| Write verbs | `create`, `update`, `patch`, `delete`, `deletecollection` | Not granted |
-| Privileged resources | `secrets`, `configmaps`, `serviceaccounts` | Not granted |
-| Auth/authz resources | `clusterroles`, `rolebindings`, `tokenreviews` | Not granted |
-| Workload mutation | `scale`, `rollout`, `exec`, `attach`, `portforward` | Not granted |
-| Admission control | `mutatingwebhookconfigurations`, `validatingwebhookconfigurations` | Not granted |
-| Cluster-level control | `nodes/proxy`, `nodes/stats`, `nodes/log` | Not granted |
-| Pod logs | `pods/log` | Not granted |
-| Pod exec | `pods/exec` | Not granted |
-| Custom resources | Any CRD | Not granted |
+| `deployments` | Desired and ready replica counts | `IFA-SCL-001` and `IFA-SCL-002` never fire; `/api/v1/workloads` is empty |
+| `pods` | Container restart counts, GPU resource requests | Restart counts are absent from `/api/v1/workloads`; no rule is affected today |
+| `horizontalpodautoscalers` | The replica ceiling | `IFA-SCL-001` cannot distinguish "the autoscaler will fix this" from "the autoscaler has nothing left" |
 
----
+Discovery is entirely optional. With `kubernetes.enabled: false` IFA scrapes and
+diagnoses normally; only the scaling rules and the workloads endpoint go quiet.
+If the API is unreachable at startup, IFA logs a warning and carries on rather
+than refusing to start — a missing kubeconfig should not turn into a total
+outage.
 
-## ClusterRoleBinding
+## Namespace scope versus cluster scope
 
-IFA uses a single `ClusterRoleBinding` that binds the role above to the
-`ifa` `ServiceAccount` in the `inference` namespace.
-
-```yaml
-apiVersion: rbac.authorization.k8s.io/v1
-kind: ClusterRoleBinding
-metadata:
-  name: inference-autopilot-reader
-roleRef:
-  apiGroup: rbac.authorization.k8s.io
-  kind: ClusterRole
-  name: inference-autopilot-reader
-subjects:
-  - kind: ServiceAccount
-    name: ifa
-    namespace: inference
-```
-
-The binding is cluster-scoped so IFA can watch resources across namespaces.
-This is necessary for multi-namespace inference fleet visibility. The
-permissions themselves remain read-only regardless of scope.
-
----
-
-## ServiceAccount
-
-```yaml
-apiVersion: v1
-kind: ServiceAccount
-metadata:
-  name: ifa
-  namespace: inference
-```
-
-- No `imagePullSecrets` attached by default.
-- No `automountServiceAccountToken: true` override — uses cluster default.
-- In hardened environments, set `automountServiceAccountToken: false` on
-  pods that do not need Kubernetes API access (e.g. if node-agent is
-  separated from control-plane SA in future).
-
----
-
-## Namespace Scope Considerations
-
-The `ClusterRoleBinding` grants read access across all namespaces. If your
-security policy requires namespace-scoped access only, you can replace the
-`ClusterRole` + `ClusterRoleBinding` with a `Role` + `RoleBinding` scoped
-to the `inference` namespace. The trade-off is that IFA will only see
-workloads in that single namespace.
-
-To apply namespace-scoped RBAC instead:
-
-```yaml
-apiVersion: rbac.authorization.k8s.io/v1
-kind: Role
-metadata:
-  name: inference-autopilot-reader
-  namespace: inference
-rules:
-  - apiGroups: [""]
-    resources: ["pods", "nodes", "namespaces"]
-    verbs: ["get", "list", "watch"]
-  - apiGroups: ["apps"]
-    resources: ["deployments", "daemonsets", "replicasets"]
-    verbs: ["get", "list", "watch"]
----
-apiVersion: rbac.authorization.k8s.io/v1
-kind: RoleBinding
-metadata:
-  name: inference-autopilot-reader
-  namespace: inference
-roleRef:
-  apiGroup: rbac.authorization.k8s.io
-  kind: Role
-  name: inference-autopilot-reader
-subjects:
-  - kind: ServiceAccount
-    name: ifa
-    namespace: inference
-```
-
-Note: `nodes` is a cluster-scoped resource. A namespace-scoped `Role` cannot
-grant access to `nodes`. Remove it from the rule if you switch to `Role`,
-and accept that node-level context will not be available.
-
----
-
-## Verifying Permissions at Runtime
-
-To confirm what the IFA service account can actually do in a running cluster:
-
-```bash
-# Check if IFA SA can list pods
-kubectl auth can-i list pods \
-  --as=system:serviceaccount:inference:ifa \
-  -n inference
-# Expected: yes
-
-# Check it cannot create pods
-kubectl auth can-i create pods \
-  --as=system:serviceaccount:inference:ifa \
-  -n inference
-# Expected: no
-
-# Check it cannot read secrets
-kubectl auth can-i get secrets \
-  --as=system:serviceaccount:inference:ifa \
-  -n inference
-# Expected: no
-
-# List all permissions for the IFA SA
-kubectl auth can-i --list \
-  --as=system:serviceaccount:inference:ifa \
-  -n inference
-```
-
----
-
-## rbac.mode Config Field
-
-As of Phase 2.5, `config.yaml` exposes an `rbac.mode` field:
+Default is a namespaced `Role`, and that is the recommendation:
 
 ```yaml
 rbac:
-  mode: read-only   # only valid value currently; documents posture explicitly
+  scope: namespace
+config:
+  kubernetes:
+    namespace: inference
 ```
 
-This field is informational in Phase 2.5 — it documents the declared RBAC
-posture and is validated at startup. If a future phase introduces an optional
-narrower role (namespace-only), this field will gate that behaviour.
+A `ClusterRole` is only needed to watch every namespace, which the chart selects
+automatically when `config.kubernetes.namespace` is empty:
+
+```yaml
+rbac:
+  scope: cluster
+config:
+  kubernetes:
+    namespace: ""
+```
+
+Prefer namespace scope. A read-only cluster-wide `list pods` still lets the
+holder read every pod spec in the cluster, and pod specs contain environment
+variables.
+
+To watch a handful of namespaces rather than all of them, install one release
+per namespace. It costs a few tens of MB each and keeps the permission grant
+tight.
+
+## Verifying it yourself
+
+```bash
+kubectl get clusterrole autopilot -o yaml     # or: kubectl -n inference get role autopilot -o yaml
+
+# Confirm the ServiceAccount cannot write:
+SA=system:serviceaccount:inference:autopilot
+kubectl auth can-i --as="$SA" delete deployments -n inference   # no
+kubectl auth can-i --as="$SA" create pods        -n inference   # no
+kubectl auth can-i --as="$SA" get secrets        -n inference   # no
+kubectl auth can-i --as="$SA" list deployments   -n inference   # yes
+```
+
+## Narrowing further
+
+To grant nothing at all, set `rbac.create: false` and `config.kubernetes.enabled:
+false`. IFA then runs with no Kubernetes access whatsoever and works entirely
+from its configured scrape targets — a reasonable posture if you do not need the
+scaling rules.
+
+The permission set is checked in as a template rather than generated, so a
+`helm template` diff shows exactly what an upgrade would change.
