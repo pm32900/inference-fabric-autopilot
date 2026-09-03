@@ -190,6 +190,22 @@ config:
     dsn: ""
     queue_size: 1024
 
+  # Optional webhook delivery for findings. Off by default; the API serves
+  # every finding either way.
+  #
+  # Leave webhook_url empty here and set alerting.existingSecret below: the URL
+  # is the credential for Slack, Teams and PagerDuty alike, and this block is
+  # rendered into a ConfigMap.
+  alerting:
+    enabled: false
+    webhook_url: ""
+    # info, warning or critical. Warning is the default because the info rules
+    # are observations about the telemetry itself, and paging on them teaches
+    # the recipient to ignore the channel.
+    min_severity: warning
+    timeout: 5s
+    queue_size: 256
+
   recommender:
     thresholds:
       sustain_for: 45s

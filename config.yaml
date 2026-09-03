@@ -87,6 +87,30 @@ database:
   # Snapshots buffered for writing before new ones are dropped and counted.
   queue_size: 1024
 
+alerting:
+  # Optional webhook delivery. The API serves every finding whether or not this
+  # is on; enabling it only adds a push.
+  #
+  # Findings are sent as transitions, not as evaluations: a condition that holds
+  # for an hour produces one alert, a second if it escalates, and one when it
+  # clears. See docs/adr/0006-alert-deduplication.md.
+  enabled: false
+  # Leave empty here and set IFA_ALERTING_WEBHOOK_URL instead. Slack, Teams and
+  # PagerDuty all put the credential in the URL itself, so it belongs in a
+  # Secret rather than in a ConfigMap.
+  webhook_url: ""
+  # info | warning | critical. The info-level rules are observations about the
+  # telemetry itself — a workload with no DCGM endpoint, for instance — and
+  # paging on them teaches the recipient to ignore the channel.
+  min_severity: warning
+  # Bounds one delivery attempt. Must be shorter than collector.interval: the
+  # sender is a single goroutine, and a timeout longer than the interval lets a
+  # dead endpoint back the queue up faster than it drains.
+  timeout: 5s
+  # Alerts buffered before new ones are dropped and counted. Drops are visible
+  # as ifa_alerts_dropped_total.
+  queue_size: 256
+
 recommender:
   # Documented one by one, with the reasoning behind each default, in
   # docs/RECOMMENDATIONS.md. They are starting points for interactive serving:

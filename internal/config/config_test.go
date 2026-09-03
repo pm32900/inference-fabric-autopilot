@@ -143,6 +143,51 @@ recommender:
 			wantErr: "IFA_DATABASE_DSN",
 		},
 		{
+			name:    "alerting enabled with no webhook URL",
+			body:    "alerting:\n  enabled: true\n  webhook_url: \"\"\n",
+			wantErr: "IFA_ALERTING_WEBHOOK_URL",
+		},
+		{
+			name:    "alerting webhook with a non-http scheme",
+			body:    "alerting:\n  enabled: true\n  webhook_url: file:///etc/passwd\n",
+			wantErr: "scheme must be http or https",
+		},
+		{
+			name:    "alerting webhook with no host",
+			body:    "alerting:\n  enabled: true\n  webhook_url: \"https://\"\n",
+			wantErr: "must include a host",
+		},
+		{
+			// Checked even though alerting is off, so a typo is caught at
+			// startup rather than on the day someone enables it.
+			name:    "unknown min severity while disabled",
+			body:    "alerting:\n  min_severity: urgent\n",
+			wantErr: "alerting.min_severity",
+		},
+		{
+			name: "alerting timeout at or above the collector interval",
+			body: `
+collector:
+  interval: 5s
+  timeout: 2s
+alerting:
+  enabled: true
+  webhook_url: https://hooks.example.com/x
+  timeout: 5s
+`,
+			wantErr: "alerting.timeout",
+		},
+		{
+			name: "alerting queue size of zero",
+			body: `
+alerting:
+  enabled: true
+  webhook_url: https://hooks.example.com/x
+  queue_size: 0
+`,
+			wantErr: "alerting.queue_size",
+		},
+		{
 			name: "target with an unsupported runtime",
 			body: `
 collector:
@@ -235,6 +280,79 @@ collector:
 	}
 	if tgt.Deployment != "chat-deploy" || tgt.DCGMURL == "" {
 		t.Errorf("target not fully converted: %+v", tgt)
+	}
+}
+
+func TestAlertingDefaultsAreInertAndUsable(t *testing.T) {
+	cfg := Default()
+	if cfg.Alerting.Enabled {
+		t.Error("alerting must be off by default; posting to an endpoint nobody " +
+			"configured is a surprise")
+	}
+	if cfg.Alerting.MinSeverity != "warning" {
+		t.Errorf("default min_severity = %q, want warning", cfg.Alerting.MinSeverity)
+	}
+	// The defaults must satisfy the alerting.timeout < collector.interval rule,
+	// or simply enabling alerting on an otherwise default config fails to start.
+	cfg.Alerting.Enabled = true
+	cfg.Alerting.WebhookURL = "https://hooks.example.com/services/x"
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("enabling alerting on an otherwise default config does not validate: %v", err)
+	}
+}
+
+func TestAlertingWebhookURLComesFromTheEnvironment(t *testing.T) {
+	// Reserved .example host and a hyphenated token: the fixture needs the shape
+	// of a real webhook, not a string a secret scanner will mistake for a live
+	// credential and refuse to let anyone push.
+	const secret = "https://hooks.example.com/services/T0/B0/not-a-real-token-000000"
+	t.Setenv(EnvAlertingWebhookURL, secret)
+
+	cfg, err := Load(writeConfig(t, "alerting:\n  enabled: true\n"), true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Alerting.WebhookURL != secret {
+		t.Errorf("webhook URL = %q, want it taken from %s", cfg.Alerting.WebhookURL, EnvAlertingWebhookURL)
+	}
+
+	opts := cfg.AlertingOptions()
+	if opts.URL != secret {
+		t.Errorf("AlertingOptions URL = %q", opts.URL)
+	}
+	if opts.MinSeverity != "warning" {
+		t.Errorf("AlertingOptions MinSeverity = %q, want warning", opts.MinSeverity)
+	}
+}
+
+// The startup log line is the most likely place for a webhook token to escape,
+// because Slack and PagerDuty put the credential in the URL path rather than in
+// a userinfo section.
+func TestWebhookURLIsRedactedInLogOutput(t *testing.T) {
+	const token = "T00000000/B00000000/not-a-real-token-000000"
+	cfg := Default()
+	cfg.Alerting.Enabled = true
+	cfg.Alerting.WebhookURL = "https://hooks.example.com/services/" + token
+
+	out := cfg.String()
+	if strings.Contains(out, token) {
+		t.Fatalf("config.String() leaked the webhook token: %s", out)
+	}
+	if !strings.Contains(out, "hooks.example.com") {
+		t.Errorf("expected the host to survive redaction: %s", out)
+	}
+	if !strings.Contains(out, "alerting=true") {
+		t.Errorf("expected alerting state in the startup line: %s", out)
+	}
+}
+
+func TestMinSeverityIsCaseInsensitive(t *testing.T) {
+	cfg, err := Load(writeConfig(t, "alerting:\n  min_severity: CRITICAL\n"), true)
+	if err != nil {
+		t.Fatalf("a capitalised severity should be accepted: %v", err)
+	}
+	if got := cfg.AlertingOptions().MinSeverity; got != "critical" {
+		t.Errorf("MinSeverity = %q, want critical", got)
 	}
 }
 
