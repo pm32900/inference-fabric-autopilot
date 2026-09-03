@@ -18,6 +18,7 @@ import (
 
 	"gopkg.in/yaml.v3"
 
+	"github.com/pm32900/inference-fabric-autopilot/internal/alerting"
 	"github.com/pm32900/inference-fabric-autopilot/internal/collector"
 	"github.com/pm32900/inference-fabric-autopilot/internal/recommender"
 	"github.com/pm32900/inference-fabric-autopilot/internal/telemetry"
@@ -56,6 +57,7 @@ type Config struct {
 	Telemetry   TelemetryConfig   `yaml:"telemetry"`
 	Kubernetes  KubernetesConfig  `yaml:"kubernetes"`
 	Database    DatabaseConfig    `yaml:"database"`
+	Alerting    AlertingConfig    `yaml:"alerting"`
 	Recommender RecommenderConfig `yaml:"recommender"`
 }
 
@@ -138,6 +140,29 @@ type DatabaseConfig struct {
 	QueueSize int    `yaml:"queue_size"`
 }
 
+// AlertingConfig configures the optional webhook sender.
+//
+// It is off by default. IFA's findings are available from the API whether or
+// not anything is configured here, and a tool that starts posting to an
+// endpoint nobody asked it to post to is a worse surprise than one that stays
+// quiet.
+type AlertingConfig struct {
+	Enabled bool `yaml:"enabled"`
+	// WebhookURL is read from IFA_ALERTING_WEBHOOK_URL when that variable is
+	// set. Slack, Teams and PagerDuty all embed the credential in the URL
+	// itself, so it belongs in a Secret rather than in a ConfigMap — the same
+	// reasoning as the database DSN.
+	WebhookURL string `yaml:"webhook_url"`
+	// MinSeverity is the least severe finding worth sending: info, warning or
+	// critical. Findings below it are never sent and never tracked.
+	MinSeverity string `yaml:"min_severity"`
+	// Timeout bounds a single delivery attempt.
+	Timeout Duration `yaml:"timeout"`
+	// QueueSize bounds how many alerts may be waiting to be sent before further
+	// ones are dropped and counted.
+	QueueSize int `yaml:"queue_size"`
+}
+
 // RecommenderConfig holds rule thresholds.
 type RecommenderConfig struct {
 	Thresholds ThresholdConfig `yaml:"thresholds"`
@@ -195,6 +220,15 @@ func Default() *Config {
 			ResyncPeriod: Duration(10 * time.Minute),
 		},
 		Database: DatabaseConfig{QueueSize: 1024},
+		Alerting: AlertingConfig{
+			Enabled: false,
+			// Warning rather than info: the info-level rules are observations
+			// about the telemetry itself, and paging on them would teach the
+			// recipient to ignore the channel.
+			MinSeverity: string(telemetry.SeverityWarning),
+			Timeout:     Duration(alerting.DefaultTimeout),
+			QueueSize:   alerting.DefaultQueueSize,
+		},
 		Recommender: RecommenderConfig{Thresholds: ThresholdConfig{
 			SustainFor:           Duration(t.SustainFor),
 			StaleAfter:           Duration(t.StaleAfter),
@@ -248,11 +282,12 @@ func Load(path string, required bool) (*Config, error) {
 // per deployment are overridable; everything else belongs in the file, where it
 // can be reviewed.
 const (
-	EnvDatabaseDSN = "IFA_DATABASE_DSN"
-	EnvLogLevel    = "IFA_LOG_LEVEL"
-	EnvLogFormat   = "IFA_LOG_FORMAT"
-	EnvAddress     = "IFA_ADDRESS"
-	EnvClusterName = "IFA_CLUSTER_NAME"
+	EnvDatabaseDSN        = "IFA_DATABASE_DSN"
+	EnvAlertingWebhookURL = "IFA_ALERTING_WEBHOOK_URL"
+	EnvLogLevel           = "IFA_LOG_LEVEL"
+	EnvLogFormat          = "IFA_LOG_FORMAT"
+	EnvAddress            = "IFA_ADDRESS"
+	EnvClusterName        = "IFA_CLUSTER_NAME"
 )
 
 func applyEnv(cfg *Config) {
@@ -261,6 +296,11 @@ func applyEnv(cfg *Config) {
 	// lives in.
 	if v := os.Getenv(EnvDatabaseDSN); v != "" {
 		cfg.Database.DSN = v
+	}
+	// The webhook URL is a credential for the same reason, and comes from a
+	// Secret in a Helm deployment.
+	if v := os.Getenv(EnvAlertingWebhookURL); v != "" {
+		cfg.Alerting.WebhookURL = v
 	}
 	if v := os.Getenv(EnvLogLevel); v != "" {
 		cfg.Logging.Level = v
@@ -352,7 +392,65 @@ func (c *Config) Validate() error {
 	if c.Kubernetes.Enabled && c.Kubernetes.ResyncPeriod <= 0 {
 		return errors.New("config: kubernetes.resync_period must be positive")
 	}
+
+	if err := c.validateAlerting(); err != nil {
+		return err
+	}
 	return nil
+}
+
+func (c *Config) validateAlerting() error {
+	// min_severity is checked whether or not alerting is enabled: a typo in a
+	// value that only takes effect later is exactly the kind of thing this
+	// loader exists to catch at startup.
+	switch telemetry.Severity(strings.ToLower(c.Alerting.MinSeverity)) {
+	case telemetry.SeverityInfo, telemetry.SeverityWarning, telemetry.SeverityCritical:
+	default:
+		return fmt.Errorf(
+			"config: alerting.min_severity must be info, warning or critical, got %q",
+			c.Alerting.MinSeverity)
+	}
+	if !c.Alerting.Enabled {
+		return nil
+	}
+	if c.Alerting.WebhookURL == "" {
+		return fmt.Errorf("config: alerting.enabled is true but no webhook URL is set; "+
+			"put it in alerting.webhook_url or in the %s environment variable",
+			EnvAlertingWebhookURL)
+	}
+	if err := alerting.ValidateURL(c.Alerting.WebhookURL); err != nil {
+		// The error from ValidateURL does not include the URL, so this cannot
+		// print the credential into the startup log.
+		return fmt.Errorf("config: %w", err)
+	}
+	if c.Alerting.Timeout <= 0 {
+		return errors.New("config: alerting.timeout must be positive")
+	}
+	if c.Alerting.Timeout.D() >= c.Collector.Interval.D() {
+		// The sender is one goroutine. A timeout longer than the interval means
+		// a dead endpoint holds it past the point where the next evaluation
+		// produces more alerts, and the queue only ever grows.
+		return fmt.Errorf(
+			"config: alerting.timeout (%s) must be shorter than collector.interval (%s), "+
+				"otherwise a slow endpoint backs the send queue up faster than it drains",
+			c.Alerting.Timeout.D(), c.Collector.Interval.D())
+	}
+	if c.Alerting.QueueSize <= 0 {
+		return errors.New("config: alerting.queue_size must be positive")
+	}
+	return nil
+}
+
+// AlertingOptions converts the YAML block into the sender's type. The caller
+// supplies the logger.
+func (c *Config) AlertingOptions() alerting.Options {
+	return alerting.Options{
+		URL:         c.Alerting.WebhookURL,
+		MinSeverity: telemetry.Severity(strings.ToLower(c.Alerting.MinSeverity)),
+		Cluster:     c.ClusterName,
+		Timeout:     c.Alerting.Timeout.D(),
+		QueueSize:   c.Alerting.QueueSize,
+	}
 }
 
 // Thresholds converts the YAML threshold block into the recommender's type.
@@ -420,6 +518,11 @@ func (c *Config) String() string {
 	b.WriteString(" database=" + strconv.FormatBool(c.Database.Enabled))
 	if c.Database.Enabled {
 		b.WriteString(" dsn=" + RedactDSN(c.Database.DSN))
+	}
+	b.WriteString(" alerting=" + strconv.FormatBool(c.Alerting.Enabled))
+	if c.Alerting.Enabled {
+		b.WriteString(" webhook=" + alerting.RedactURL(c.Alerting.WebhookURL))
+		b.WriteString(" min_severity=" + strings.ToLower(c.Alerting.MinSeverity))
 	}
 	return b.String()
 }
