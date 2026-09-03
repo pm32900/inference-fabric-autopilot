@@ -17,6 +17,7 @@ permissions:
 env:
   # Must match the `go` directive in go.mod.
   GO_VERSION: "1.25"
+  GOTOOLCHAIN: local
 
 jobs:
   test:
