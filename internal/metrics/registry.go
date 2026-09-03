@@ -36,8 +36,29 @@ type Registry struct {
 
 	// dbStats is supplied by the durable sink when one is configured.
 	dbStats func() (written, failed, dropped int64)
+	// alertStats is supplied by the webhook sender when one is configured.
+	alertStats func() AlertStats
 
 	now func() time.Time
+}
+
+// AlertStats is the webhook sender's view of its own delivery outcomes.
+//
+// It is a struct rather than the bare multiple returns SetDatabaseStats uses
+// because five unnamed int64s at a call site is a bug waiting to happen — two
+// of these are counters that mean almost opposite things, and transposing
+// Dropped and Suppressed would misreport a healthy instance as a lossy one.
+type AlertStats struct {
+	Sent    int64
+	Failed  int64
+	Dropped int64
+	// Suppressed counts findings the sender deliberately did not deliver
+	// because they were already open and unchanged. It is expected to be large
+	// and growing on a healthy instance.
+	Suppressed int64
+	// Open is the number of findings currently tracked as delivered and not yet
+	// resolved.
+	Open int
 }
 
 // BuildInfo is surfaced as a labelled gauge so a scrape identifies which build
@@ -129,6 +150,13 @@ func (r *Registry) SetDatabaseStats(f func() (written, failed, dropped int64)) {
 	r.dbStats = f
 }
 
+// SetAlertStats registers a callback supplying webhook-sender counters.
+func (r *Registry) SetAlertStats(f func() AlertStats) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.alertStats = f
+}
+
 // Handler serves the registry in Prometheus text format.
 func (r *Registry) Handler() http.HandlerFunc {
 	return func(w http.ResponseWriter, req *http.Request) {
@@ -147,6 +175,7 @@ func (r *Registry) Handler() http.HandlerFunc {
 func (r *Registry) Write(w io.Writer) {
 	r.mu.RLock()
 	dbStats := r.dbStats
+	alertStats := r.alertStats
 	keys := make([]targetKey, 0, len(r.scrapes))
 	for k := range r.scrapes {
 		keys = append(keys, k)
@@ -246,6 +275,36 @@ func (r *Registry) Write(w io.Writer) {
 			"Telemetry rows dropped because the write queue was full. "+
 				"Non-zero means history is incomplete; diagnostics are unaffected.", "counter")
 		fmt.Fprintf(w, "ifa_database_dropped_total %d\n", dropped)
+	}
+
+	if alertStats != nil {
+		a := alertStats()
+		fam(w, "ifa_alerts_sent_total",
+			"Alerts delivered to the webhook endpoint, by transition rather than by "+
+				"evaluation: a finding that holds for an hour is sent once.", "counter")
+		fmt.Fprintf(w, "ifa_alerts_sent_total %d\n", a.Sent)
+
+		fam(w, "ifa_alert_failures_total",
+			"Alerts the webhook endpoint did not accept, after retries. "+
+				"Delivery is at most once, so these alerts are not resent: alert on "+
+				"any increase.", "counter")
+		fmt.Fprintf(w, "ifa_alert_failures_total %d\n", a.Failed)
+
+		fam(w, "ifa_alerts_dropped_total",
+			"Alerts dropped because the send queue was full, meaning the endpoint "+
+				"is slower than findings are produced. Diagnostics are unaffected; "+
+				"the API still reports every finding.", "counter")
+		fmt.Fprintf(w, "ifa_alerts_dropped_total %d\n", a.Dropped)
+
+		fam(w, "ifa_alerts_suppressed_total",
+			"Findings not sent because they were already open and unchanged. "+
+				"Expected to be large and growing: this is the deduplication working, "+
+				"not a fault.", "counter")
+		fmt.Fprintf(w, "ifa_alerts_suppressed_total %d\n", a.Suppressed)
+
+		fam(w, "ifa_alerts_open",
+			"Findings currently delivered and not yet resolved.", "gauge")
+		fmt.Fprintf(w, "ifa_alerts_open %d\n", a.Open)
 	}
 }
 
