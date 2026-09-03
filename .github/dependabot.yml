@@ -11,10 +11,16 @@ updates:
         patterns:
           - "k8s.io/*"
           - "sigs.k8s.io/*"
+
       minor-and-patch:
+        patterns:
+          - "*"
         update-types:
           - minor
           - patch
+        exclude-patterns:
+          - "k8s.io/*"
+          - "sigs.k8s.io/*"
 
   - package-ecosystem: github-actions
     directory: "/"
