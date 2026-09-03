@@ -127,7 +127,10 @@ func TestNotifyDeliversAFiringAlert(t *testing.T) {
 
 	s.Notify([]telemetry.Recommendation{rec("IFA-KV-001", telemetry.SeverityCritical, "chat")})
 
-	waitFor(t, "one delivery", func() bool { return len(r.got()) == 1 })
+	waitFor(t, "one delivery", func() bool {
+		sent, failed, dropped, _ := s.Stats()
+		return len(r.got()) == 1 && sent == 1 && failed == 0 && dropped == 0
+	})
 
 	p := r.got()[0]
 	if p.Event != EventFiring {
