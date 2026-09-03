@@ -129,6 +129,45 @@ func TestDatabaseMetricsOnlyAppearWhenConfigured(t *testing.T) {
 	}
 }
 
+func TestAlertMetricsOnlyAppearWhenConfigured(t *testing.T) {
+	r := New(BuildInfo{})
+	mf := render(t, r)
+	if _, ok := mf.Type("ifa_alerts_sent_total"); ok {
+		t.Error("alert metrics are exposed without alerting configured")
+	}
+
+	r.SetAlertStats(func() AlertStats {
+		return AlertStats{Sent: 12, Failed: 2, Dropped: 5, Suppressed: 900, Open: 3}
+	})
+	mf = render(t, r)
+
+	for name, want := range map[string]float64{
+		"ifa_alerts_sent_total":       12,
+		"ifa_alert_failures_total":    2,
+		"ifa_alerts_dropped_total":    5,
+		"ifa_alerts_suppressed_total": 900,
+		"ifa_alerts_open":             3,
+	} {
+		v, ok := mf.Sum(name, nil)
+		if !ok {
+			t.Errorf("%s is missing; names: %v", name, mf.Names())
+			continue
+		}
+		if v != want {
+			t.Errorf("%s = %v, want %v", name, v, want)
+		}
+	}
+
+	// Suppressed and dropped are the pair most easily transposed, and they mean
+	// opposite things: one is deduplication working, the other is alert loss.
+	if typ, _ := mf.Type("ifa_alerts_open"); typ != "gauge" {
+		t.Errorf("ifa_alerts_open type = %q, want gauge", typ)
+	}
+	if typ, _ := mf.Type("ifa_alerts_suppressed_total"); typ != "counter" {
+		t.Errorf("ifa_alerts_suppressed_total type = %q, want counter", typ)
+	}
+}
+
 func TestHandlerRejectsWrites(t *testing.T) {
 	r := New(BuildInfo{})
 	h := r.Handler()
