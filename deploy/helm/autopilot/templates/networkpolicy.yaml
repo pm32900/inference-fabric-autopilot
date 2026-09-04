@@ -91,4 +91,17 @@ spec:
         - port: {{ .Values.networkPolicy.databasePort }}
           protocol: TCP
     {{- end }}
+    {{- if .Values.config.alerting.enabled }}
+    # Webhook endpoint for alert delivery. Slack, Teams and PagerDuty are all
+    # external services, so the full external address space is needed — there
+    # is no namespace selector that narrows this further.
+    - to:
+        - ipBlock:
+            cidr: 0.0.0.0/0
+      ports:
+        - port: 443
+          protocol: TCP
+        - port: 80
+          protocol: TCP
+    {{- end }}
 {{- end }}

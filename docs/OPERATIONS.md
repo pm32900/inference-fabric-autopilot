@@ -143,3 +143,74 @@ Notable messages:
 | `telemetry dropped: database write queue is full` | History incomplete; diagnostics unaffected. |
 | `kubernetes discovery unavailable` | Scaling rules will not run. Not fatal. |
 | `pruned workloads with no recent telemetry` | Routine; a workload stopped reporting and aged out. |
+| `alert dropped: webhook queue is full` | The webhook endpoint is too slow or down. Alerts are being lost. |
+| `webhook delivery failed` | One delivery attempt failed. Includes the host (not the token). |
+| `webhook alerting enabled` | Startup confirmation; logs the redacted URL and min_severity. |
+
+## Alerting
+
+IFA sends findings to a webhook endpoint as state transitions: one alert when a
+condition first appears, one more if it escalates to a higher severity, and a
+resolved alert when it clears. A condition that holds for an hour sends exactly
+one alert, not one per scrape cycle.
+
+### Verifying locally
+
+Start the included receiver before enabling alerting:
+
+```bash
+./scripts/webhook-receiver.sh 9999
+```
+
+Then set the webhook URL (in a separate terminal):
+
+```bash
+export IFA_ALERTING_WEBHOOK_URL=http://localhost:9999/hook
+./bin/control-plane --demo
+```
+
+You should see `FIRING` lines appear as the demo findings arrive, and nothing
+further on subsequent cycles for the same conditions. When the simulated
+workload's state changes you may see `ESCALATED` or `RESOLVED`.
+
+### Metrics
+
+```promql
+# Alerts are being delivered.
+rate(ifa_alerts_sent_total[5m]) > 0
+
+# Alerts are being lost because the webhook is too slow or down.
+rate(ifa_alerts_dropped_total[5m]) > 0
+
+# Delivery failures (retried twice before counting).
+rate(ifa_alerts_failed_total[5m]) > 0
+
+# How many findings are currently open (firing, not yet resolved).
+ifa_alerts_open
+```
+
+`ifa_alerts_suppressed_total` counts findings that were already open and
+unchanged — it will be large and growing on a healthy instance. A suppressed
+count of zero with an open count above zero means something is wrong.
+
+### Alerts not sending
+
+1. **Is alerting enabled?** The startup log prints `webhook alerting enabled`
+   with the redacted URL. No such line means `alerting.enabled: false` or the
+   binary predates this feature.
+
+2. **Is the webhook URL set?** `IFA_ALERTING_WEBHOOK_URL` overrides
+   `alerting.webhook_url`. Check `curl -s localhost:8080/api/v1/healthz | jq
+   .config | grep alerting`.
+
+3. **Are deliveries failing?** `ifa_alerts_failed_total` increments when both
+   delivery attempts fail. The log line `webhook delivery failed` names the host
+   (not the token) so you can check connectivity without exposing credentials.
+
+4. **Is the queue full?** `ifa_alerts_dropped_total` increments when the
+   in-memory queue is full. This means the webhook endpoint is not keeping up.
+   Increase `alerting.queue_size` or investigate the endpoint.
+
+5. **Is min_severity filtering too aggressively?** The default is `warning`,
+   which suppresses `info`-level findings. Lower it to `info` if you want
+   observability notices delivered.
