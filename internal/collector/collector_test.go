@@ -597,3 +597,53 @@ func TestRunStopsOnContextCancellation(t *testing.T) {
 		t.Fatal("Run did not return after its context was cancelled")
 	}
 }
+
+// OnCycle must fire after the first scrape and after every subsequent tick.
+// OnFirstCycle and OnCycle are independent: both fire on the first cycle,
+// in that order, so the API is ready before the alerter's first evaluation.
+func TestOnCycleFiredAfterEachScrape(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		fmt.Fprint(w, vllmPayload(1, 0.5, 1000, 5000, 200))
+	}))
+	defer srv.Close()
+
+	target := Target{
+		WorkloadName: "w", Runtime: telemetry.RuntimeVLLM, MetricsURL: srv.URL,
+	}
+
+	var firstCycles, cycles atomic.Int64
+
+	// Use a very short interval so a second tick arrives quickly.
+	opts := testOptions()
+	opts.Interval = 20 * time.Millisecond
+	opts.Timeout = 10 * time.Millisecond
+	opts.OnFirstCycle = func() { firstCycles.Add(1) }
+	opts.OnCycle = func() { cycles.Add(1) }
+
+	c := newTestCollector(t, []Target{target}, telemetry.NewStore(), opts)
+	ctx, cancel := context.WithCancel(context.Background())
+
+	go c.Run(ctx)
+
+	// Wait for at least two OnCycle calls (first + one tick).
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		if cycles.Load() >= 2 {
+			break
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	cancel()
+
+	if got := cycles.Load(); got < 2 {
+		t.Fatalf("OnCycle called %d time(s), want ≥ 2", got)
+	}
+	if got := firstCycles.Load(); got != 1 {
+		t.Fatalf("OnFirstCycle called %d time(s), want exactly 1", got)
+	}
+	// OnFirstCycle fires before OnCycle on the first pass, so by the time
+	// OnCycle has been called at least once, OnFirstCycle must be at exactly 1.
+	if firstCycles.Load() != 1 {
+		t.Fatalf("OnFirstCycle was called more than once")
+	}
+}

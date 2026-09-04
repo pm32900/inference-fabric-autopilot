@@ -134,6 +134,13 @@ database:
   existingSecret: ""
   secretKey: dsn
 
+alerting:
+  # The webhook URL contains the credential (Slack, Teams and PagerDuty all
+  # embed the token in the path). Reference a Secret here rather than writing
+  # the URL into the ConfigMap. Set config.alerting.enabled as well.
+  existingSecret: ""
+  secretKey: webhook_url
+
 # Extra environment variables for the container.
 extraEnv: []
 

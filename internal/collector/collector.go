@@ -145,6 +145,11 @@ type Options struct {
 	// The API uses it to flip readiness: before that point the store is empty,
 	// and serving an empty fleet as if it were the whole fleet is misleading.
 	OnFirstCycle func()
+	// OnCycle is called after every completed scrape cycle, including the first.
+	// When alerting is enabled, main registers a callback that calls Analyze
+	// and Notify so that alerts fire on a predictable schedule rather than on
+	// API request traffic.
+	OnCycle func()
 	// Clock overrides the collector's source of time. It exists so that tests
 	// can produce exact rates and exact scrape spacing instead of depending on
 	// how long an HTTP round trip happened to take. Leave nil in production.
@@ -273,6 +278,9 @@ func (c *Collector) Run(ctx context.Context) {
 	if c.opts.OnFirstCycle != nil {
 		c.opts.OnFirstCycle()
 	}
+	if c.opts.OnCycle != nil {
+		c.opts.OnCycle()
+	}
 
 	ticker := time.NewTicker(c.opts.Interval)
 	defer ticker.Stop()
@@ -286,6 +294,9 @@ func (c *Collector) Run(ctx context.Context) {
 			return
 		case <-ticker.C:
 			c.ScrapeAll(ctx)
+			if c.opts.OnCycle != nil {
+				c.opts.OnCycle()
+			}
 		case <-prune.C:
 			if n := c.store.Prune(); n > 0 {
 				c.opts.Logger.Info("pruned workloads with no recent telemetry", "count", n)

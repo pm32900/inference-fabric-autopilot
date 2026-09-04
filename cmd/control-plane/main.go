@@ -17,6 +17,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/pm32900/inference-fabric-autopilot/internal/alerting"
 	"github.com/pm32900/inference-fabric-autopilot/internal/api"
 	"github.com/pm32900/inference-fabric-autopilot/internal/collector"
 	"github.com/pm32900/inference-fabric-autopilot/internal/config"
@@ -133,6 +134,32 @@ func run() error {
 		workloads = demoServer
 	}
 
+	engine := recommender.NewEngine(cfg.Thresholds())
+
+	// ── Alerting sender ───────────────────────────────────────────────────────
+	var alertSender *alerting.Sender
+	if cfg.Alerting.Enabled {
+		aopts := cfg.AlertingOptions()
+		aopts.Logger = log
+		alertSender, err = alerting.New(aopts)
+		if err != nil {
+			return fmt.Errorf("alerting: %w", err)
+		}
+		reg.SetAlertStats(func() metrics.AlertStats {
+			sent, failed, dropped, suppressed := alertSender.Stats()
+			return metrics.AlertStats{
+				Sent:       sent,
+				Failed:     failed,
+				Dropped:    dropped,
+				Suppressed: suppressed,
+				Open:       alertSender.Open(),
+			}
+		})
+		log.Info("webhook alerting enabled",
+			"webhook", alerting.RedactURL(cfg.Alerting.WebhookURL),
+			"min_severity", cfg.Alerting.MinSeverity)
+	}
+
 	// ── Collector ────────────────────────────────────────────────────────────
 	targets, err := cfg.Targets()
 	if err != nil {
@@ -152,6 +179,13 @@ func run() error {
 		Metrics:      reg,
 		Workloads:    workloads,
 		OnFirstCycle: func() { readyOnce.Do(func() { close(collectorReady) }) },
+		OnCycle: func() {
+			if alertSender == nil {
+				return
+			}
+			recs := engine.Analyze(store.Latest(), store.History)
+			alertSender.Notify(recs)
+		},
 	})
 	if err != nil {
 		return err
@@ -160,8 +194,6 @@ func run() error {
 		log.Warn("no scrape targets configured; the API will report no workloads",
 			"hint", "add collector.targets to the config file, or run with --demo")
 	}
-
-	engine := recommender.NewEngine(cfg.Thresholds())
 
 	// ── HTTP ─────────────────────────────────────────────────────────────────
 	mux := http.NewServeMux()
@@ -229,6 +261,9 @@ func run() error {
 		log.Warn("HTTP server did not shut down cleanly", "err", err)
 	}
 	<-collectorDone
+	if alertSender != nil {
+		alertSender.Close()
+	}
 	log.Info("stopped")
 	return nil
 }
